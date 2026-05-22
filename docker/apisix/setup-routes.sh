@@ -12,16 +12,16 @@ ZITADEL_URL="${ZITADEL_URL:-http://zitadel:8080}"
 : "${MOCK_BACKEND_URL:-http://mock-backend:80}"
 
 wait_for_apisix() {
-  echo "===> Waiting for APISIX Admin API..."
-  for i in $(seq 1 30); do
+  echo "===> Waiting for APISIX Admin API (up to 3 min)..."
+  for i in $(seq 1 60); do
     if curl -sf "${ADMIN_URL}/apisix/admin/routes" -H "X-API-KEY: ${ADMIN_KEY}" > /dev/null 2>&1; then
-      echo "    APISIX ready."
+      echo "    APISIX ready (attempt ${i})."
       return
     fi
-    sleep 2
-    echo "    ... attempt ${i}/30"
+    sleep 3
+    echo "    ... attempt ${i}/60"
   done
-  echo "ERROR: APISIX Admin API not reachable after 60s"; exit 1
+  echo "ERROR: APISIX Admin API not reachable after 3 minutes"; exit 1
 }
 
 create_upstream() {

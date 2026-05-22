@@ -98,15 +98,18 @@ jobs:
 
       - name: Wait for APISIX to be healthy
         run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:9080/health > /dev/null 2>&1 || \
-               curl -sf http://localhost:9180/apisix/admin/routes \
+          echo "Waiting for APISIX (up to 3 min)..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:9180/apisix/admin/routes \
                  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" > /dev/null 2>&1; then
-              echo "APISIX is up"; break
+              echo "APISIX Admin API is up (attempt ${i})"; exit 0
             fi
             sleep 3
-            echo "  ... attempt ${i}/30"
+            echo "  ... attempt ${i}/60"
           done
+          echo "ERROR: APISIX Admin API not reachable after 3 minutes"
+          docker compose logs apisix
+          exit 1
 
       - name: Configure routes
         run: bash docker/apisix/setup-routes.sh
