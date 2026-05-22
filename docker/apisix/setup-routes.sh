@@ -49,6 +49,8 @@ create_route() {
     plugins="{
       \"openid-connect\": {
         \"discovery\": \"${ZITADEL_URL}/.well-known/openid-configuration\",
+        \"client_id\": \"local-gateway\",
+        \"client_secret\": \"local-gateway-secret\",
         \"bearer_only\": true,
         \"token_signing_alg_values_expected\": \"RS256\",
         \"set_userinfo_header\": true,
@@ -73,6 +75,24 @@ create_route() {
     }" > /dev/null
 }
 
+create_health_route() {
+  local id="$1" name="$2" host="$3" upstream_id="$4"
+  echo "--> Route: ${name} (${host}/health) → upstream/${upstream_id} [health, no auth]"
+  curl -sf -X PUT "${ADMIN_URL}/apisix/admin/routes/${id}" \
+    -H "X-API-KEY: ${ADMIN_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"name\": \"${name}\",
+      \"host\": \"${host}\",
+      \"uri\": \"/health\",
+      \"upstream_id\": \"${upstream_id}\",
+      \"plugins\": {
+        \"proxy-rewrite\": {\"uri\": \"/get\"},
+        \"response-rewrite\": {\"headers\": {\"set\": {\"X-Gateway\": \"sfg-labs\"}}}
+      }
+    }" > /dev/null
+}
+
 wait_for_apisix
 
 echo ""
@@ -85,23 +105,20 @@ create_upstream "4" "zitadel:8080"       # Zitadel auth
 echo ""
 echo "===> Creating routes"
 
-# Public: health checks (no auth)
-create_route "10" "health-check"  "localhost"             "/health" "1" "false"
-
 # Public: Zitadel auth endpoints (no auth)
 create_route "20" "zitadel-auth"  "auth.localhost"        "/"       "4" "false"
 
 # Protected: NMA (JWT required)
 create_route "30" "nma-api"       "api.nma.localhost"     "/api/"   "1" "true"
-create_route "31" "nma-health"    "api.nma.localhost"     "/health" "1" "false"
+create_health_route "31" "nma-health"    "api.nma.localhost"     "1"
 
 # Protected: Baithak (JWT required)
 create_route "40" "baithak-api"   "api.baithak.localhost" "/api/"   "2" "true"
-create_route "41" "baithak-health" "api.baithak.localhost" "/health" "2" "false"
+create_health_route "41" "baithak-health" "api.baithak.localhost" "2"
 
 # Protected: CMS (JWT required)
 create_route "50" "cms-api"       "api.cms.localhost"     "/api/"   "3" "true"
-create_route "51" "cms-health"    "api.cms.localhost"     "/health" "3" "false"
+create_health_route "51" "cms-health"    "api.cms.localhost"     "3"
 
 echo ""
 echo "========================================================"

@@ -13,10 +13,10 @@ check() {
   local desc="$1" expected="$2" actual="$3"
   if [[ "$actual" == "$expected" || "$actual" =~ $expected ]]; then
     echo "  PASS: ${desc} (${actual})"
-    ((PASS++))
+    PASS=$((PASS + 1))
   else
     echo "  FAIL: ${desc} — expected ${expected}, got ${actual}"
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
   fi
 }
 
