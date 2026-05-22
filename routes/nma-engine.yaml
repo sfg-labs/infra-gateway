@@ -54,7 +54,7 @@ spec:
         burst: 50
         rejected_code: 429
         key_type: var
-        key: consumer_name
+        key: remote_addr
     - name: response-rewrite
       enable: true
       config:

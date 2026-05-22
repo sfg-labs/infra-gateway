@@ -36,9 +36,20 @@ helm upgrade --install sfg-zitadel zitadel/zitadel \
   ${DRY_RUN}
 
 echo "===> [4/5] Installing APISIX + Ingress Controller"
+if [[ -z "${DRY_RUN}" ]]; then
+  if ! kubectl -n "${NAMESPACE}" get secret apisix-admin-key &>/dev/null; then
+    echo "    Generating APISIX admin key secret..."
+    kubectl -n "${NAMESPACE}" create secret generic apisix-admin-key \
+      --from-literal=key="$(openssl rand -hex 16)"
+  fi
+  APISIX_ADMIN_KEY="$(kubectl -n "${NAMESPACE}" get secret apisix-admin-key \
+    -o jsonpath='{.data.key}' | base64 -d)"
+fi
+
 helm upgrade --install sfg-apisix apisix/apisix \
   --namespace "${NAMESPACE}" \
   --values helm/apisix/values.yaml \
+  ${APISIX_ADMIN_KEY:+--set "ingress-controller.config.apisix.adminKey=${APISIX_ADMIN_KEY}"} \
   --wait \
   --timeout 5m \
   ${DRY_RUN}

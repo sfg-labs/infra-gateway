@@ -32,15 +32,24 @@ spec:
       config:
         header_name: X-Request-Id
         include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
 
-  # NMA health check — for uptime monitors and K8s readiness probes
+  # NMA health check — explicit paths only, no wildcard
   - name: nma-health
     match:
       hosts:
       - api.nma-india.in
       paths:
       - /health
-      - /health/*
+      - /health/live
+      - /health/ready
       methods:
       - GET
     backends:
@@ -49,32 +58,64 @@ spec:
       servicePort: 3000
       weight: 100
 
-  # Baithak health + Razorpay webhook
-  - name: baithak-public
+  # Baithak health check — explicit paths only
+  - name: baithak-health
     match:
       hosts:
       - api.baithak.live
       paths:
       - /health
-      - /health/*
-      - /webhooks/razorpay
+      - /health/live
+      - /health/ready
       methods:
       - GET
-      - POST
     backends:
     - serviceName: baithak-api
       serviceNamespace: sfg-apps
       servicePort: 8000
       weight: 100
 
-  # CMS health check
+  # Razorpay webhook — own route, strict rate limit, POST only.
+  # IMPORTANT: Baithak service MUST validate X-Razorpay-Signature on every request.
+  # Signature = HMAC-SHA256(webhook_secret, raw_request_body).
+  # Razorpay IPs change; do not rely on IP allowlisting alone.
+  - name: baithak-razorpay-webhook
+    match:
+      hosts:
+      - api.baithak.live
+      paths:
+      - /webhooks/razorpay
+      methods:
+      - POST
+    backends:
+    - serviceName: baithak-api
+      serviceNamespace: sfg-apps
+      servicePort: 8000
+      weight: 100
+    plugins:
+    - name: limit-req
+      enable: true
+      config:
+        rate: 5
+        burst: 2
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  # CMS health check — explicit paths only
   - name: cms-health
     match:
       hosts:
       - api.cms.sfg-labs.in
       paths:
       - /health
-      - /health/*
+      - /health/live
+      - /health/ready
       methods:
       - GET
     backends:

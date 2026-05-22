@@ -6,8 +6,13 @@
 set -euo pipefail
 
 ADMIN_URL="${APISIX_ADMIN_URL:-http://localhost:9180}"
-ADMIN_KEY="${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}"  # default dev key
+ADMIN_KEY="${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}"  # default dev key only
 ZITADEL_URL="${ZITADEL_URL:-http://zitadel:8080}"
+# OIDC client credentials — override via env for non-local environments.
+# In bearer_only mode these are not used for JWT validation, only for the
+# APISIX plugin schema. In production, inject from a Kubernetes Secret.
+OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-local-gateway}"
+OIDC_CLIENT_SECRET="${OIDC_CLIENT_SECRET:-local-gateway-secret}"
 # MOCK_BACKEND_URL available for manual override if needed
 : "${MOCK_BACKEND_URL:-http://mock-backend:80}"
 
@@ -49,8 +54,8 @@ create_route() {
     plugins="{
       \"openid-connect\": {
         \"discovery\": \"${ZITADEL_URL}/.well-known/openid-configuration\",
-        \"client_id\": \"local-gateway\",
-        \"client_secret\": \"local-gateway-secret\",
+        \"client_id\": \"${OIDC_CLIENT_ID}\",
+        \"client_secret\": \"${OIDC_CLIENT_SECRET}\",
         \"bearer_only\": true,
         \"token_signing_alg_values_expected\": \"RS256\",
         \"set_userinfo_header\": true,

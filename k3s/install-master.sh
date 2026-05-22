@@ -14,7 +14,7 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUBE_VERSION}" sh -s - ser
   --cluster-init \
   --disable=traefik \
   --disable=servicelb \
-  --write-kubeconfig-mode=644 \
+  --write-kubeconfig-mode=600 \
   --node-label="sfg-role=master" \
   --flannel-backend=wireguard-native
   # WireGuard encrypts all pod-to-pod traffic between nodes at kernel level

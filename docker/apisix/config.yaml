@@ -1,5 +1,10 @@
-# APISIX config for local Docker testing
+# APISIX config for LOCAL DOCKER TESTING ONLY.
 # Routes are configured via Admin API in docker/apisix/setup-routes.sh
+#
+# PRODUCTION DIFFERENCES (k3s Helm chart handles these):
+#   - admin key injected from Kubernetes Secret, not hardcoded
+#   - allow_admin restricted to pod CIDR (10.42.0.0/16), never 0.0.0.0/0
+#   - admin API not exposed via NodePort; only ingress-controller reaches it
 
 apisix:
   node_listen: 9080
@@ -13,8 +18,14 @@ deployment:
     admin_listen:
       ip: 0.0.0.0
       port: 9180
+    # 172.0.0.0/8 covers all Docker bridge networks (172.17.x.x on Linux, 172.19.x.x on macOS).
+    # 127.0.0.0/8 covers host-to-container on some Docker configurations.
+    # PRODUCTION: replace with pod CIDR only (e.g. 10.42.0.0/16 for k3s default).
     allow_admin:
-      - 0.0.0.0/0
+      - 172.0.0.0/8
+      - 127.0.0.0/8
+    # DEV KEY — rotated per-environment via Kubernetes Secret in production.
+    # Never use this key value on a publicly reachable host.
     admin_key:
       - name: admin
         key: edd1c9f034335f136f87ad84b625c8f1
