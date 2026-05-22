@@ -6,8 +6,8 @@ set -euo pipefail
 PASS=0
 FAIL=0
 
-pass() { echo "    PASS: $1"; ((PASS++)); }
-fail() { echo "    FAIL: $1 — $2"; ((FAIL++)); }
+pass() { echo "    PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "    FAIL: $1 — $2"; FAIL=$((FAIL + 1)); }
 
 echo "===> [1/2] YAML lint"
 if command -v yamllint &>/dev/null; then

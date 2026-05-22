@@ -13,7 +13,7 @@
 services:
 
   etcd:
-    image: bitnami/etcd:3.5
+    image: bitnami/etcd:3.5.9
     environment:
       ALLOW_NONE_AUTHENTICATION: "yes"
       ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379

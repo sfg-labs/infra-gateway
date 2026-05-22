@@ -71,9 +71,9 @@ PYEOF
 echo "===> Validating ApisixRoute files"
 for f in routes/*.yaml; do
   if validate_route "$f"; then
-    ((PASS++))
+    PASS=$((PASS + 1))
   else
-    ((FAIL++))
+    FAIL=$((FAIL + 1))
   fi
 done
 

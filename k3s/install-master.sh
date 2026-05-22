@@ -4,7 +4,7 @@
 # After completion, copy the NODE_TOKEN printed at the end to use on workers.
 set -euo pipefail
 
-KUBE_VERSION="${KUBE_VERSION:-v1.29.4+k3s1}"
+KUBE_VERSION="${KUBE_VERSION:-v1.30.2+k3s1}"
 
 echo "===> [1/4] Updating system packages"
 apt-get update -qq && apt-get upgrade -y -qq

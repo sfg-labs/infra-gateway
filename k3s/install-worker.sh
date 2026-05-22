@@ -7,7 +7,7 @@ set -euo pipefail
 MASTER_IP="${1:?Usage: $0 <MASTER_PRIVATE_IP> <NODE_TOKEN> [worker-label]}"
 NODE_TOKEN="${2:?Usage: $0 <MASTER_PRIVATE_IP> <NODE_TOKEN> [worker-label]}"
 WORKER_LABEL="${3:-sfg-worker}"
-KUBE_VERSION="${KUBE_VERSION:-v1.29.4+k3s1}"
+KUBE_VERSION="${KUBE_VERSION:-v1.30.2+k3s1}"
 
 echo "===> [1/3] Updating system packages"
 apt-get update -qq && apt-get upgrade -y -qq

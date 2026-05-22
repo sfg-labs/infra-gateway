@@ -65,12 +65,14 @@ jobs:
         run: |
           helm template sfg-apisix apisix/apisix \
             --namespace sfg-gateway \
+            --kube-version v1.30.0 \
             --values helm/apisix/values.yaml > /dev/null
 
       - name: Render Zitadel template
         run: |
           helm template sfg-zitadel zitadel/zitadel \
             --namespace sfg-gateway \
+            --kube-version v1.30.0 \
             --values helm/zitadel/values.yaml \
             --set zitadel.masterkeySecretName=zitadel-masterkey > /dev/null
 

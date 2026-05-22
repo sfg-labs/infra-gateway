@@ -8,7 +8,8 @@ set -euo pipefail
 ADMIN_URL="${APISIX_ADMIN_URL:-http://localhost:9180}"
 ADMIN_KEY="${APISIX_ADMIN_KEY:-edd1c9f034335f136f87ad84b625c8f1}"  # default dev key
 ZITADEL_URL="${ZITADEL_URL:-http://zitadel:8080}"
-MOCK_URL="${MOCK_BACKEND_URL:-http://mock-backend:80}"
+# MOCK_BACKEND_URL available for manual override if needed
+: "${MOCK_BACKEND_URL:-http://mock-backend:80}"
 
 wait_for_apisix() {
   echo "===> Waiting for APISIX Admin API..."
