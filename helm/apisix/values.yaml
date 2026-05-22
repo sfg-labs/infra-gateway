@@ -1,0 +1,94 @@
+# APISIX Helm values — sfg-labs infra-gateway
+# Chart: apisix/apisix  (helm repo add apisix https://charts.apiseven.com)
+# Deployed to namespace: sfg-gateway
+
+replicaCount: 2
+
+apisix:
+  enabled: true
+  kind: Deployment
+
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    prometheus.io/path: "/apisix/prometheus/metrics"
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Spread pods across worker-01 and worker-02
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values: [apisix]
+          topologyKey: kubernetes.io/hostname
+
+gateway:
+  type: NodePort
+  http:
+    enabled: true
+    servicePort: 80
+    containerPort: 9080
+    nodePort: 30080
+  tls:
+    enabled: false   # TLS terminated at Cloudflare / external LB
+
+# etcd — single replica for Y1, set replicaCount: 3 for HA
+etcd:
+  enabled: true
+  replicaCount: 1
+  persistence:
+    enabled: true
+    size: 4Gi
+    storageClass: ""   # uses default storage class
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+# APISIX Ingress Controller — watches ApisixRoute CRDs
+ingress-controller:
+  enabled: true
+
+  config:
+    apisix:
+      serviceName: apisix-admin
+      serviceNamespace: sfg-gateway
+      servicePort: 9180
+      adminKey: ""   # set via secret APISIX_ADMIN_KEY
+
+    kubernetes:
+      watchNamespaces:
+        - sfg-gateway
+        - sfg-apps
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Dashboard — disabled in production (use kubectl port-forward when needed)
+dashboard:
+  enabled: false
+
+# Prometheus metrics
+serviceMonitor:
+  enabled: false   # enable if you have Prometheus Operator installed

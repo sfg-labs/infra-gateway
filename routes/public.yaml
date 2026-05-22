@@ -1,0 +1,84 @@
+# Public routes — no JWT required.
+# Covers: Zitadel auth endpoints, health checks, Razorpay webhooks.
+# WARNING: Adding a path here means ANY caller can reach it unauthenticated.
+#          Review every addition carefully before merging.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: public-routes
+  namespace: sfg-gateway
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes — login, health, webhooks"
+spec:
+  http:
+
+  # Zitadel auth server — all traffic, no JWT check (Zitadel handles its own auth)
+  - name: zitadel-auth
+    match:
+      hosts:
+      - auth.sfg-labs.in
+      paths:
+      - /*
+    backends:
+    - serviceName: sfg-zitadel
+      serviceNamespace: sfg-gateway
+      servicePort: 8080
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  # NMA health check — for uptime monitors and K8s readiness probes
+  - name: nma-health
+    match:
+      hosts:
+      - api.nma-india.in
+      paths:
+      - /health
+      - /health/*
+      methods:
+      - GET
+    backends:
+    - serviceName: nma-india-engine
+      serviceNamespace: sfg-apps
+      servicePort: 3000
+      weight: 100
+
+  # Baithak health + Razorpay webhook
+  - name: baithak-public
+    match:
+      hosts:
+      - api.baithak.live
+      paths:
+      - /health
+      - /health/*
+      - /webhooks/razorpay
+      methods:
+      - GET
+      - POST
+    backends:
+    - serviceName: baithak-api
+      serviceNamespace: sfg-apps
+      servicePort: 8000
+      weight: 100
+
+  # CMS health check
+  - name: cms-health
+    match:
+      hosts:
+      - api.cms.sfg-labs.in
+      paths:
+      - /health
+      - /health/*
+      methods:
+      - GET
+    backends:
+    - serviceName: cms-api
+      serviceNamespace: sfg-apps
+      servicePort: 8001
+      weight: 100

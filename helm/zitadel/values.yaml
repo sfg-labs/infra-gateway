@@ -1,0 +1,90 @@
+# Zitadel Helm values — sfg-labs infra-gateway
+# Chart: zitadel/zitadel  (helm repo add zitadel https://charts.zitadel.com)
+# Deployed to namespace: sfg-gateway
+#
+# BEFORE DEPLOYING — create these K8s secrets:
+#   kubectl -n sfg-gateway create secret generic zitadel-masterkey \
+#     --from-literal=masterkey=$(openssl rand -base64 32)
+#
+#   kubectl -n sfg-gateway create secret generic zitadel-db \
+#     --from-literal=password=YOUR_POSTGRES_PASSWORD
+
+replicaCount: 2
+
+zitadel:
+  # The masterkey secret must be created manually before deploy (see above)
+  masterkeySecretName: zitadel-masterkey
+
+  configmapConfig:
+    ExternalSecure: true
+    ExternalDomain: auth.sfg-labs.in    # ← change to your actual auth domain
+    ExternalPort: 443
+
+    TLS:
+      Enabled: false   # TLS terminated at Cloudflare
+
+    Database:
+      Postgres:
+        Host: "10.0.0.4"          # ← db-01 private IP on Cantech VLAN
+        Port: 5432
+        Database: zitadel
+        User: zitadel
+        SSL:
+          Mode: disable            # private VLAN, no SSL needed
+
+  secretConfig:
+    Database:
+      Postgres:
+        Password: ""               # injected from zitadel-db secret below
+
+  # Reference the DB password secret
+  env:
+    - name: ZITADEL_DATABASE_POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: zitadel-db
+          key: password
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Spread across workers
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values: [zitadel]
+        topologyKey: kubernetes.io/hostname
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Zitadel init job — runs DB migrations on first deploy
+initJob:
+  enabled: true
+
+# Readiness / liveness
+livenessProbe:
+  httpGet:
+    path: /debug/healthz
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /debug/ready
+    port: 8080
+  initialDelaySeconds: 20
+  periodSeconds: 5

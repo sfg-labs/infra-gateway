@@ -1,0 +1,25 @@
+# Local Helm values with secrets (never commit)
+helm/zitadel/values.local.yaml
+helm/apisix/values.local.yaml
+
+# Rendered Helm templates
+helm/rendered/
+
+# kubeconfig
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+secrets/
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

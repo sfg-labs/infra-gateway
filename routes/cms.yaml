@@ -1,0 +1,67 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: cms-api
+  namespace: sfg-gateway
+  labels:
+    sfg-project: cms
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "CMS — Constituency Management System for Kota Ladpura AC-189"
+    sfg-labs.in/team: "cms-team"
+    sfg-labs.in/upstream: "cms-api:8001"
+spec:
+  http:
+  - name: cms-protected-api
+    match:
+      hosts:
+      - api.cms.sfg-labs.in
+      paths:
+      - /api/*
+      - /citizens/*
+      - /grievances/*
+      - /schemes/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: cms-api
+      serviceNamespace: sfg-apps
+      servicePort: 8001
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        bearer_only: true
+        realm: cms
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 30
+        burst: 15
+        rejected_code: 429
+        key_type: var
+        key: consumer_name
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: cms

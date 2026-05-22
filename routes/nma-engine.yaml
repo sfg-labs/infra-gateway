@@ -1,0 +1,64 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: nma-india-engine
+  namespace: sfg-gateway
+  labels:
+    sfg-project: nma-india
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "NMA India Engine — tax audit API"
+    sfg-labs.in/team: "nma-team"
+    sfg-labs.in/upstream: "nma-india-engine:3000"
+spec:
+  http:
+  - name: nma-api
+    match:
+      hosts:
+      - api.nma-india.in
+      paths:
+      - /api/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: nma-india-engine
+      serviceNamespace: sfg-apps
+      servicePort: 3000
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        bearer_only: true
+        realm: nma-india
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 100
+        burst: 50
+        rejected_code: 429
+        key_type: var
+        key: consumer_name
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: nma-india

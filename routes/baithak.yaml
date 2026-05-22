@@ -1,0 +1,90 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: baithak-api
+  namespace: sfg-gateway
+  labels:
+    sfg-project: baithak
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Baithak — Hindi meeting recorder and AI coach API"
+    sfg-labs.in/team: "baithak-team"
+    sfg-labs.in/upstream: "baithak-api:8000"
+spec:
+  http:
+  - name: baithak-protected-api
+    match:
+      hosts:
+      - api.baithak.live
+      paths:
+      - /api/*
+      - /meetings/*
+      - /transcripts/*
+      - /coaching/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: baithak-api
+      serviceNamespace: sfg-apps
+      servicePort: 8000
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        bearer_only: true
+        realm: baithak
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: consumer_name
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: baithak
+
+  # WebSocket support for real-time transcription
+  - name: baithak-ws
+    match:
+      hosts:
+      - api.baithak.live
+      paths:
+      - /ws/*
+    backends:
+    - serviceName: baithak-api
+      serviceNamespace: sfg-apps
+      servicePort: 8000
+      weight: 100
+    websocket: true
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        bearer_only: true
+        realm: baithak
+        token_signing_alg_values_expected: RS256
+        timeout: 3
