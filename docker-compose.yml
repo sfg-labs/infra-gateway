@@ -1,0 +1,90 @@
+# Local test environment — APISIX + Zitadel + mock backend
+# Usage: docker compose up -d
+# Then: bash tests/smoke/smoke-test.sh http://localhost:9080 http://localhost:8080
+#
+# Services:
+#   etcd          :2379  — APISIX config store
+#   apisix        :9080  — API gateway (http)
+#   apisix-admin  :9180  — Admin API (configure routes)
+#   zitadel       :8080  — Auth server (login, OIDC)
+#   postgres      :5432  — Zitadel state
+#   mock-backend  :8081  — httpbin, stands in for NMA/Baithak/CMS pods
+
+services:
+
+  etcd:
+    image: bitnami/etcd:3.5
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  apisix:
+    image: apache/apisix:3.9.0-debian
+    depends_on:
+      etcd:
+        condition: service_healthy
+    ports:
+      - "9080:9080"   # gateway — send API calls here
+      - "9180:9180"   # admin API — configure routes here
+    volumes:
+      - ./docker/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: zitadel
+      POSTGRES_USER: zitadel
+      POSTGRES_PASSWORD: zitadel_local_pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zitadel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"   # auth server — login + OIDC discovery here
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: zitadel_local_pass
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: zitadel_local_pass
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: "8080"
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_MASTERKEY: "MasterkeyNeedsToHave32Characters"
+    command: start-from-init --masterkeyFromEnv --tlsMode disabled
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/debug/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Stands in for NMA / Baithak / CMS pods locally
+  mock-backend:
+    image: kennethreitz/httpbin
+    ports:
+      - "8081:80"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/get"]
+      interval: 5s
+      retries: 5

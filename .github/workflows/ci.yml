@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  lint:
+    name: Lint (YAML + Shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: YAML lint
+        run: |
+          yamllint -d '{extends: relaxed, rules: {line-length: {max: 200}}}' \
+            routes/ helm/apisix/values.yaml helm/zitadel/values.yaml docker/apisix/config.yaml
+
+      - name: Shell lint
+        run: |
+          shellcheck k3s/*.sh helm/deploy.sh \
+            docker/apisix/setup-routes.sh \
+            tests/lint.sh tests/helm-template.sh tests/validate-routes.sh \
+            tests/smoke/smoke-test.sh tests/smoke/smoke-test-local.sh
+
+  validate-routes:
+    name: Validate ApisixRoute YAMLs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pyyaml
+        run: pip install pyyaml
+
+      - name: Validate route structure + no duplicates
+        run: bash tests/validate-routes.sh
+
+  helm-template:
+    name: Helm Dry-Run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Add repos
+        run: |
+          helm repo add apisix  https://charts.apiseven.com
+          helm repo add zitadel https://charts.zitadel.com
+          helm repo update
+
+      - name: Render APISIX template
+        run: |
+          helm template sfg-apisix apisix/apisix \
+            --namespace sfg-gateway \
+            --values helm/apisix/values.yaml > /dev/null
+
+      - name: Render Zitadel template
+        run: |
+          helm template sfg-zitadel zitadel/zitadel \
+            --namespace sfg-gateway \
+            --values helm/zitadel/values.yaml \
+            --set zitadel.masterkeySecretName=zitadel-masterkey > /dev/null
+
+  integration:
+    name: Integration (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for Zitadel to be healthy
+        run: |
+          echo "Waiting for Zitadel..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/debug/healthz > /dev/null 2>&1; then
+              echo "Zitadel is up"; break
+            fi
+            sleep 3
+            echo "  ... attempt ${i}/60"
+          done
+
+      - name: Wait for APISIX to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9080/health > /dev/null 2>&1 || \
+               curl -sf http://localhost:9180/apisix/admin/routes \
+                 -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" > /dev/null 2>&1; then
+              echo "APISIX is up"; break
+            fi
+            sleep 3
+            echo "  ... attempt ${i}/30"
+          done
+
+      - name: Configure routes
+        run: bash docker/apisix/setup-routes.sh
+
+      - name: Run smoke tests
+        run: bash tests/smoke/smoke-test-local.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs

@@ -1,0 +1,30 @@
+# APISIX config for local Docker testing
+# Routes are configured via Admin API in docker/apisix/setup-routes.sh
+
+apisix:
+  node_listen: 9080
+  enable_ipv6: false
+
+deployment:
+  role: traditional
+  role_traditional:
+    config_provider: etcd
+  etcd:
+    host:
+      - http://etcd:2379
+    prefix: /apisix
+    timeout: 30
+
+plugin_attr:
+  prometheus:
+    enable_export_server: false
+
+plugins:
+  - openid-connect
+  - limit-req
+  - limit-count
+  - request-id
+  - response-rewrite
+  - cors
+  - proxy-rewrite
+  - http-logger
