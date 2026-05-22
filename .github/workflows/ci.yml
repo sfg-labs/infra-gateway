@@ -85,6 +85,9 @@ jobs:
       - name: Start stack
         run: docker compose up -d
 
+      - name: Show initial container status
+        run: docker compose ps
+
       - name: Wait for Zitadel to be healthy
         run: |
           echo "Waiting for Zitadel..."
