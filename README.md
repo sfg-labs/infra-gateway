@@ -3,189 +3,233 @@
 > **One gateway. Multiple projects.**  
 > Centralised API Gateway and Identity Provider for all sfg-labs services.
 
-[![k3s](https://img.shields.io/badge/k3s-v1.29-blue)](https://k3s.io)
+[![k3s](https://img.shields.io/badge/k3s-v1.30-blue)](https://k3s.io)
 [![APISIX](https://img.shields.io/badge/APISIX-3.x-orange)](https://apisix.apache.org)
 [![Zitadel](https://img.shields.io/badge/Zitadel-latest-green)](https://zitadel.com)
 [![CI](https://github.com/sfg-labs/infra-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/sfg-labs/infra-gateway/actions/workflows/ci.yml)
 
 Built on **Apache APISIX** + **Zitadel**, deployed on **k3s** on Cantech Mumbai DC.  
-Every external API call for **NMA India**, **Baithak**, and **CMS** flows through this gateway.  
-Your services receive validated user context via HTTP headers — **zero auth code needed in your service**.
+Every API call for **NMA India**, **Baithak**, and **CMS** flows through this gateway.  
+Services receive validated user context as HTTP headers — zero auth code needed.
 
 **GitHub:** [sfg-labs/infra-gateway](https://github.com/sfg-labs/infra-gateway)
 
 ---
 
-## How an API call travels end to end
-
-This is the exact path of every request — from a phone app to a pod and back.
+## Network Flow
 
 ```
-INTERNET
-   │
-   │  HTTPS (TLS 1.3)  ← encrypted by Cloudflare certificate
-   ▼
-┌─────────────┐
-│ Cloudflare  │  DDoS protection, DNS, TLS termination
-└──────┬──────┘
-       │  HTTP (private Cloudflare → server tunnel)
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                         PRODUCTION NETWORK FLOW                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  📱 Mobile App / 🌐 Web Browser
+       │
+       │  ① HTTPS :443  (TLS 1.3 — all bytes encrypted)
+       │
        ▼
-┌─────────────────────────────────────────────────────┐
-│  k3s Cluster (Cantech Mumbai DC)                    │
-│                                                     │
-│  ┌──────────────────────────────────────────────┐   │
-│  │  APISIX Pod (worker-01 or worker-02)         │   │
-│  │                                              │   │
-│  │  1. Is this a public route? (/health etc.)   │   │
-│  │     YES → forward directly to pod            │   │
-│  │     NO  → check Authorization header         │   │
-│  │                                              │   │
-│  │  2. JWT present?                             │   │
-│  │     NO  → return 401 immediately             │   │
-│  │     YES → validate signature (local JWKS)   │   │
-│  │                                              │   │
-│  │  3. JWT valid?                               │   │
-│  │     NO  → return 401                         │   │
-│  │     YES → inject headers, forward to pod     │   │
-│  └──────────────────────────────────────────────┘   │
-│              │ WireGuard encrypted (inter-node)      │
-│              ▼                                       │
-│  ┌───────────────────────┐                          │
-│  │  Your Service Pod     │                          │
-│  │  (NMA / Baithak / CMS)│                          │
-│  │                       │                          │
-│  │  Receives headers:    │                          │
-│  │  X-User-Id            │                          │
-│  │  X-User-Email         │                          │
-│  │  X-User-Roles         │                          │
-│  │  X-Tenant-Id          │                          │
-│  └───────────────────────┘                          │
-└─────────────────────────────────────────────────────┘
+  ┌─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
+  │  Cloudflare  (recommended, optional)  │  DDoS shield + free TLS cert
+  │  DNS: api.nma-india.in → 103.x.x.x   │
+  └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┬─ ─ ─ ─ ─┘
+       │  (without Cloudflare, TLS terminates at APISIX using Let's Encrypt)
+       │
+       │  ② HTTP/S  →  port 30080 on k3s-master  (NodePort)
+       │
+       ▼
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  k3s CLUSTER — Cantech Mumbai DC                                            ║
+║  ─────────────────────────────────────────────────────────────────────────  ║
+║                                                                              ║
+║   k3s-master  (103.x.x.x)       worker-01  (10.0.0.2)   worker-02 (10.0.0.3)║
+║   ┌──────────────────────┐      ┌──────────────────┐    ┌──────────────────┐║
+║   │  NodePort :30080     │      │  APISIX Pod      │    │  APISIX Pod      │║
+║   │  (entry point)  ─ ─ ─③─ ─ ▶│  :9080           │    │  :9080           │║
+║   │                      │      │                  │    │                  │║
+║   │  k3s control plane   │      │  ┌────────────┐  │    │  ┌────────────┐  │║
+║   │  (schedules pods)    │      │  │ ④ JWT check │  │    │  │ ④ JWT check│  │║
+║   └──────────────────────┘      │  │  NO  → 401  │  │    │  │  NO  → 401 │  │║
+║                                  │  │  YES → fwd  │  │    │  │  YES → fwd │  │║
+║   ┌──────────────────────┐      │  └──────┬─────┘  │    │  └──────┬─────┘  │║
+║   │  Zitadel :8080       │◀─────│    JWKS │cache   │    │    JWKS │cache   │║
+║   │  (auth server)       │      │         │         │    │         │         │║
+║   │  - issues JWT tokens │      └──────────┼────────┘    └──────────┼────────┘║
+║   │  - serves /auth/*    │                 │                         │        ║
+║   │  - JWKS public keys  │                 │  ⑤ WireGuard encrypted  │        ║
+║   └──────────────────────┘                 │    (inter-node traffic) │        ║
+║                                             │                         │        ║
+║   ┌──────────────────────┐      ┌──────────▼────────┐  ┌─────────────▼──────┐║
+║   │  etcd :2379          │      │  NMA Engine :3000  │  │  Baithak API :8000 │║
+║   │  (gateway config)    │      │  (sfg-apps ns)     │  │  CMS API     :8001 │║
+║   └──────────────────────┘      │                    │  │  (sfg-apps ns)     │║
+║                                  │  ⑥ Reads headers:  │  │                    │║
+║   ┌──────────────────────┐      │  X-User-Id         │  │  X-User-Id         │║
+║   │  Postgres :5432      │◀─────│  X-User-Email      │  │  X-User-Email      │║
+║   │  db-01 (outside K8s) │      │  X-Tenant-Id       │  │  X-Tenant-Id       │║
+║   └──────────────────────┘      │  X-User-Roles      │  │  X-User-Roles      │║
+║                                  └───────────────────┘  └────────────────────┘║
+╚══════════════════════════════════════════════════════════════════════════════╝
+       │
+       │  ⑦ Response travels back the same path
+       │
+       ▼
+  📱 Mobile App / 🌐 Web Browser  ← receives response
+```
+
+**Step by step:**
+
+| Step | What happens | Where |
+|------|-------------|-------|
+| ① | Client sends HTTPS request with `Authorization: Bearer <token>` | Internet |
+| ② | Hits k3s-master on port 30080 (NodePort exposed to internet) | Cantech DC |
+| ③ | k3s load-balances to any APISIX pod (worker-01 or worker-02) | Inside cluster |
+| ④ | APISIX checks JWT — invalid/missing = **401 returned, pod never contacted** | APISIX pod |
+| ⑤ | Valid request forwarded to service pod over WireGuard encrypted link | Cross-node |
+| ⑥ | Service reads pre-validated user headers — no token logic needed | Service pod |
+| ⑦ | Response returns to client | Everywhere |
+
+---
+
+## Auth Flow
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                    HOW LOGIN WORKS                               ║
+╚══════════════════════════════════════════════════════════════════╝
+
+  App                    APISIX                 Zitadel
+   │                       │                       │
+   │── POST /auth/login ──▶│── (public route) ────▶│
+   │   {email, password}   │   no JWT check        │── verifies credentials
+   │                       │                       │── generates JWT (RS256)
+   │◀─ {access_token,  ────│◀──────────────────────│
+   │    refresh_token,     │                        │
+   │    expires_in: 3600}  │                        │
+   │                       │                        │
+   │  stores token locally │                        │
+
+
+╔══════════════════════════════════════════════════════════════════╗
+║                 HOW EVERY API CALL WORKS                         ║
+╚══════════════════════════════════════════════════════════════════╝
+
+  App                    APISIX                 Your Service Pod
+   │                       │                       │
+   │── GET /api/audit ────▶│                       │
+   │   Authorization:      │                       │
+   │   Bearer eyJ...       │                       │
+   │                       │── verify JWT ─────┐   │
+   │                       │   (local JWKS,    │   │
+   │                       │    no network)    │   │
+   │                       │                   │   │
+   │                       │  ┌─ INVALID ──────┘   │
+   │◀── 401 Unauthorized ──│◀─┘  (pod never sees)  │
+   │                       │                       │
+   │                       │  ┌─ VALID ────────────┘
+   │                       │──▶ forward + inject:  │
+   │                       │   X-User-Id           │
+   │                       │   X-User-Email        │
+   │                       │   X-Tenant-Id         │
+   │                       │   X-User-Roles        │
+   │                       │                       │── handles request
+   │◀────── 200 OK ────────│◀──────────────────────│   (no JWT code needed)
 ```
 
 ---
 
-## How Auth Works (step by step)
-
-### Step 1 — Login (done once, gets you a token)
+## Local Docker Test Flow
 
 ```
-Mobile App / Web
-      │
-      │  POST https://auth.sfg-labs.in/v1/users/me/login
-      │  { "email": "user@example.com", "password": "..." }
-      │
-      ▼
-   Zitadel (auth server)
-      │
-      │  Returns:
-      │  { "access_token": "eyJ...", "expires_in": 3600 }
-      │
-      ▼
-   App stores token locally
-```
+╔══════════════════════════════════════════════════════════════════╗
+║                LOCAL DOCKER TESTING (no k3s needed)             ║
+╚══════════════════════════════════════════════════════════════════╝
 
-### Step 2 — Every API call after login
+  Your laptop
+  │
+  ├── curl localhost:9080   ──▶  APISIX container :9080
+  │                                      │
+  ├── curl localhost:8080   ──▶  Zitadel container :8080
+  │                                      │
+  └── curl localhost:8081   ──▶  mock-backend (httpbin) :80
+                                         │ (stands in for NMA/Baithak/CMS pods)
 
-```mermaid
-sequenceDiagram
-    participant App as Mobile / Web App
-    participant CF as Cloudflare
-    participant GW as APISIX Gateway
-    participant Z as Zitadel
-    participant Pod as Service Pod<br/>(NMA / Baithak / CMS)
-
-    App->>CF: GET /api/audit<br/>Authorization: Bearer eyJ...
-    CF->>GW: Forward (TLS terminated)
-
-    Note over GW: Check: is /api/audit a public route?
-    Note over GW: No → validate JWT
-
-    GW->>GW: Fetch Zitadel JWKS (cached, no network call)
-    GW->>GW: Verify JWT signature (RS256)
-    GW->>GW: Extract user_id, roles, tenant_id
-
-    alt JWT invalid or missing
-        GW-->>App: 401 Unauthorized (pod never sees request)
-    else JWT valid
-        GW->>Pod: Forward + inject headers<br/>X-User-Id, X-User-Email, X-User-Roles, X-Tenant-Id
-        Pod-->>GW: Response (no auth logic needed)
-        GW-->>CF: Response
-        CF-->>App: HTTPS Response
-    end
-```
-
-### Step 3 — Token refresh (automatic, app handles this)
-
-```
-Token expires after 1 hour.
-App calls POST /auth/v1/oidc/token with refresh_token → gets new access_token.
-No re-login needed for the user.
+  docker compose services:
+  ┌─────────────────┬────────────┬───────────────────────────────┐
+  │ Service         │ Port       │ Purpose                       │
+  ├─────────────────┼────────────┼───────────────────────────────┤
+  │ etcd            │ 2379       │ APISIX config store           │
+  │ apisix          │ 9080       │ Gateway (send API calls here) │
+  │ apisix-admin    │ 9180       │ Admin API (configure routes)  │
+  │ zitadel         │ 8080       │ Auth server (login + OIDC)    │
+  │ postgres        │ 5432       │ Zitadel state                 │
+  │ mock-backend    │ 8081       │ Fake NMA/Baithak/CMS pod      │
+  └─────────────────┴────────────┴───────────────────────────────┘
 ```
 
 ---
 
-## Security: How payloads are protected
-
-Every request is protected by **two independent encryption layers**:
+## Security Layers
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  LAYER 1: Cloudflare TLS (Internet traffic)                     │
-│                                                                  │
-│  Internet ──[TLS 1.3 encrypted]──► Cloudflare ──► k3s cluster  │
-│                                                                  │
-│  • Certificate issued by Cloudflare                             │
-│  • All data encrypted in transit — no one can read or modify    │
-│  • Cloudflare blocks DDoS before it reaches your servers        │
-└─────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════╗
+║                    WHAT PROTECTS YOUR DATA                       ║
+╚══════════════════════════════════════════════════════════════════╝
 
-┌─────────────────────────────────────────────────────────────────┐
-│  LAYER 2: WireGuard (Inside the cluster, pod to pod)           │
-│                                                                  │
-│  APISIX Pod ──[WireGuard encrypted]──► Service Pod              │
-│                                                                  │
-│  • k3s uses WireGuard as its network overlay                    │
-│  • All traffic between nodes (worker-01 ↔ worker-02) is        │
-│    encrypted at the kernel level — no application change needed  │
-│  • Even if someone has access to the server's network cable,    │
-│    they cannot read pod-to-pod traffic                          │
-└─────────────────────────────────────────────────────────────────┘
+  LAYER 1 — Internet traffic
+  ──────────────────────────
+  Client ══[TLS 1.3]══▶ Cloudflare / APISIX
 
-┌─────────────────────────────────────────────────────────────────┐
-│  LAYER 3: JWT Signature Verification (Auth integrity)           │
-│                                                                  │
-│  • Every JWT is signed by Zitadel using RS256 (private key)    │
-│  • APISIX verifies the signature using the public key only      │
-│  • Tampering with the JWT payload = signature mismatch = 401   │
-│  • Private key never leaves Zitadel                             │
-└─────────────────────────────────────────────────────────────────┘
+  Everything on the wire is encrypted.
+  Nobody can read or modify bytes in transit.
+
+  LAYER 2 — Inside the cluster (node to node)
+  ────────────────────────────────────────────
+  worker-01 ══[WireGuard kernel encryption]══▶ worker-02
+
+  Enabled via --flannel-backend=wireguard-native on k3s install.
+  Even if someone physically taps the server's network cable,
+  they see only encrypted WireGuard packets.
+
+  LAYER 3 — Token integrity
+  ─────────────────────────
+  JWT signed by Zitadel with RS256 private key.
+  APISIX verifies with public key only.
+  Tamper with any byte in the token → signature fails → 401.
+  Private key never leaves Zitadel.
+
+  ┌──────────────────┬─────────────────────┬────────────────────┐
+  │ Attack           │ Blocked by          │ Result             │
+  ├──────────────────┼─────────────────────┼────────────────────┤
+  │ Sniff internet   │ TLS 1.3             │ Encrypted garbage  │
+  │ Sniff inter-node │ WireGuard           │ Encrypted garbage  │
+  │ Forge JWT        │ RS256 signature     │ 401                │
+  │ Tamper JWT body  │ RS256 signature     │ 401                │
+  │ No token at all  │ APISIX auth check   │ 401 (pod safe)     │
+  │ Expired token    │ JWT exp claim check │ 401                │
+  └──────────────────┴─────────────────────┴────────────────────┘
 ```
-
-### What this means in practice
-
-| Attack | Protected by | Result |
-|--------|-------------|--------|
-| Sniff traffic on the internet | Cloudflare TLS | Encrypted, unreadable |
-| Sniff traffic between cluster nodes | WireGuard | Encrypted, unreadable |
-| Forge a JWT token | RS256 signature | Invalid signature → 401 |
-| Tamper with JWT payload | RS256 signature | Signature mismatch → 401 |
-| Call API without a token | APISIX auth check | 401 before pod sees it |
-| Replay an expired token | JWT `exp` claim check | 401 |
-| DDoS the server | Cloudflare | Blocked at edge |
 
 ---
 
-## How to connect your service
+## Services Routed
 
-### For backend teams — 3 steps
+| Project | External Host | Pod | Port | Auth |
+|---------|---------------|-----|------|------|
+| NMA India | `api.nma-india.in` | `nma-india-engine` | 3000 | JWT |
+| Baithak | `api.baithak.live` | `baithak-api` | 8000 | JWT |
+| CMS | `api.cms.sfg-labs.in` | `cms-api` | 8001 | JWT |
+| Auth | `auth.sfg-labs.in` | `zitadel` | 8080 | Public |
 
-**Step 1:** Make sure your service is running as a K8s `Service` in `sfg-apps` namespace:
+---
+
+## How to connect your service (BE team)
+
+**Step 1** — Your K8s Service must be in `sfg-apps` namespace:
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: my-service       # ← remember this name
+  name: my-service        # ← remember this name
   namespace: sfg-apps
 spec:
   selector:
@@ -194,7 +238,7 @@ spec:
     - port: 3000
 ```
 
-**Step 2:** Create `routes/my-service.yaml` in this repo:
+**Step 2** — Create `routes/my-service.yaml` in this repo:
 ```yaml
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
@@ -210,7 +254,7 @@ spec:
       paths:
       - /api/*
     backends:
-    - serviceName: my-service      # must match Step 1
+    - serviceName: my-service
       serviceNamespace: sfg-apps
       servicePort: 3000
     plugins:
@@ -223,113 +267,60 @@ spec:
         userinfo_header_name: X-Userinfo
 ```
 
-**Step 3:** Open a PR. Gateway picks it up automatically on merge — no restart, no manual apply.
+**Step 3** — Open a PR. Gateway picks it up on merge, no restart needed.
+
+**Headers your service receives (pre-validated):**
+```
+X-User-Id      →  usr_abc123
+X-User-Email   →  user@example.com
+X-User-Roles   →  admin,auditor
+X-Tenant-Id    →  tenant_xyz
+X-Request-Id   →  req_abc123
+X-Gateway      →  sfg-labs
+```
 
 See [docs/adding-a-service.md](docs/adding-a-service.md) for the full guide.
 
 ---
 
-## Headers your service receives (already validated)
+## Quick Start
 
-```
-X-User-Id      → usr_abc123           Zitadel user ID
-X-User-Email   → user@example.com     User email
-X-User-Roles   → admin,auditor        Comma-separated roles
-X-Tenant-Id    → tenant_xyz           Multi-tenant ID
-X-Userinfo     → eyJ...               Base64 full OIDC info
-X-Request-Id   → req_abc123           Unique request trace ID
-X-Gateway      → sfg-labs             Confirms passed through gateway
-```
-
-**Your service never needs to validate tokens.** If a request arrives at your pod with these headers, it has already been verified.
-
----
-
-## Services routed
-
-| Project | External Host | Pod | Port | Auth |
-|---------|---------------|-----|------|------|
-| NMA India | `api.nma-india.in` | `nma-india-engine` | 3000 | JWT |
-| Baithak | `api.baithak.live` | `baithak-api` | 8000 | JWT |
-| CMS | `api.cms.sfg-labs.in` | `cms-api` | 8001 | JWT |
-| Auth | `auth.sfg-labs.in` | `zitadel` | 8080 | Public |
-
----
-
-## Infrastructure
-
-| VM | Spec | Role | Cost |
-|----|------|------|------|
-| k3s-master | 4c / 8 GB | Control plane | ₹1,500/mo |
-| worker-01 | 4c / 8 GB | APISIX + Zitadel + NMA | ₹1,500/mo |
-| worker-02 | 4c / 8 GB | APISIX + Baithak + CMS | ₹1,500/mo |
-| db-01 | 4c / 16 GB | Postgres (outside K8s) | ₹2,800/mo |
-| ops-01 | 2c / 4 GB | Grafana + Prometheus + Loki | ₹800/mo |
-| **Total** | | **Gateway runs as pods — no extra cost** | **₹8,100/mo** |
-
----
-
-## Quick Start (DevOps)
-
-### Prerequisites
-- 3 Cantech VMs provisioned
-- `db-01` Postgres with `zitadel` database created
-- `kubectl` + `helm` + `docker` installed locally
-
-### 1. Provision k3s cluster
 ```bash
-# On k3s-master VM
+# 1. Provision k3s (run on each VM)
 bash k3s/install-master.sh
-# Copy the NODE_TOKEN printed at the end
-
-# On worker-01 and worker-02
-bash k3s/install-worker.sh <MASTER_PRIVATE_IP> <NODE_TOKEN>
-```
-
-### 2. Pull kubeconfig
-```bash
+bash k3s/install-worker.sh <MASTER_IP> <NODE_TOKEN>
 bash k3s/kubeconfig.sh <MASTER_PUBLIC_IP>
-kubectl get nodes  # 3 nodes = Ready
-```
 
-### 3. Deploy
-```bash
+# 2. Deploy gateway + auth
 bash helm/deploy.sh
 kubectl apply -f routes/
-```
 
-### 4. Test locally with Docker (before touching any VM)
-```bash
+# 3. Test locally with Docker first
 docker compose up -d
 bash docker/apisix/setup-routes.sh
 bash tests/smoke/smoke-test-local.sh
 ```
 
----
-
 ## Running Tests
 
 ```bash
-bash tests/validate-routes.sh      # route YAML schema check
-bash tests/lint.sh                 # yamllint + shellcheck
-bash tests/helm-template.sh        # Helm dry-run (no cluster needed)
-bash tests/smoke/smoke-test-local.sh   # Docker stack smoke tests
+bash tests/validate-routes.sh        # route YAML schema
+bash tests/lint.sh                   # yamllint + shellcheck
+bash tests/helm-template.sh          # Helm dry-run
+bash tests/smoke/smoke-test-local.sh # Docker stack smoke tests
 bash tests/smoke/smoke-test.sh https://api.nma-india.in  # live
 ```
 
----
+## Infrastructure Cost
 
-## Folder Structure
-
-```
-infra-gateway/
-├── k3s/               k3s cluster setup scripts
-├── helm/              Helm values — APISIX + Zitadel
-├── routes/            ApisixRoute CRDs per service
-├── docker/            Local test stack (Docker Compose config + route setup)
-├── tests/             Lint, Helm dry-run, smoke tests
-└── docs/              Guide for service owners
-```
+| VM | Spec | Role | ₹/mo |
+|----|------|------|------|
+| k3s-master | 4c / 8 GB | Control plane | 1,500 |
+| worker-01 | 4c / 8 GB | APISIX + Zitadel + NMA | 1,500 |
+| worker-02 | 4c / 8 GB | APISIX + Baithak + CMS | 1,500 |
+| db-01 | 4c / 16 GB | Postgres (outside K8s) | 2,800 |
+| ops-01 | 2c / 4 GB | Grafana + Prometheus | 800 |
+| **Total** | | **Gateway = pods, ₹0 extra** | **₹8,100** |
 
 ---
 

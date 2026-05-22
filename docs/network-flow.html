@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>infra-gateway — Network Flow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+  }
+
+  h1 {
+    font-size: 22px;
+    color: #58a6ff;
+    margin-bottom: 4px;
+    letter-spacing: 1px;
+  }
+  .subtitle { color: #7d8590; font-size: 13px; margin-bottom: 32px; }
+
+  /* Scenario tabs */
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 28px;
+  }
+  .tab {
+    padding: 8px 20px;
+    border-radius: 6px;
+    border: 1px solid #30363d;
+    background: #161b22;
+    color: #7d8590;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .2s;
+  }
+  .tab.active { background: #1f6feb; border-color: #388bfd; color: #fff; }
+
+  /* Main canvas area */
+  .canvas {
+    width: 900px;
+    height: 500px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Nodes */
+  .node {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .node-box {
+    width: 110px;
+    height: 64px;
+    border-radius: 10px;
+    border: 1.5px solid;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .3px;
+    position: relative;
+    transition: all .3s;
+  }
+  .node-box .icon { font-size: 20px; }
+  .node-label {
+    font-size: 10px;
+    color: #7d8590;
+    text-align: center;
+    max-width: 120px;
+  }
+
+  /* Node colours */
+  .node-client .node-box  { background: #1a2332; border-color: #1f6feb; color: #58a6ff; }
+  .node-cf .node-box      { background: #2a1a0e; border-color: #f78166; color: #f78166; border-style: dashed; }
+  .node-gw .node-box      { background: #0e2825; border-color: #3fb950; color: #3fb950; }
+  .node-auth .node-box    { background: #1e1a30; border-color: #bc8cff; color: #bc8cff; }
+  .node-pod .node-box     { background: #1a2332; border-color: #1f6feb; color: #79c0ff; }
+
+  /* Active glow */
+  .node-box.active-glow { box-shadow: 0 0 18px rgba(63, 185, 80, .55); }
+  .node-box.error-glow  { box-shadow: 0 0 18px rgba(248, 81, 73, .55); }
+  .node-box.pulse-glow  { box-shadow: 0 0 18px rgba(188, 140, 255, .55); }
+
+  /* SVG arrows layer */
+  .arrows-svg {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .arrow-path {
+    stroke: #30363d;
+    stroke-width: 1.5;
+    fill: none;
+    stroke-dasharray: 6 4;
+    opacity: .4;
+  }
+  .arrow-path.active {
+    stroke: #3fb950;
+    opacity: 1;
+    stroke-dasharray: none;
+  }
+  .arrow-path.error {
+    stroke: #f85149;
+    opacity: 1;
+    stroke-dasharray: none;
+  }
+  .arrow-path.auth-path {
+    stroke: #bc8cff;
+    opacity: 1;
+    stroke-dasharray: none;
+  }
+
+  /* Animated packet */
+  .packet {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    pointer-events: none;
+    display: none;
+    z-index: 10;
+  }
+  .packet.request { background: #58a6ff; box-shadow: 0 0 8px #1f6feb; }
+  .packet.success { background: #3fb950; box-shadow: 0 0 8px #2ea043; }
+  .packet.error   { background: #f85149; box-shadow: 0 0 8px #da3633; }
+  .packet.auth    { background: #bc8cff; box-shadow: 0 0 8px #8957e5; }
+
+  /* Step log */
+  .log {
+    width: 900px;
+    margin-top: 16px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 18px;
+    min-height: 56px;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .log-line {
+    opacity: 0;
+    transform: translateY(6px);
+    transition: all .3s;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .log-line.visible { opacity: 1; transform: none; }
+  .log-step { color: #7d8590; min-width: 28px; }
+  .log-ok   { color: #3fb950; }
+  .log-err  { color: #f85149; }
+  .log-info { color: #58a6ff; }
+  .log-auth { color: #bc8cff; }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+    align-items: center;
+  }
+  button {
+    padding: 9px 22px;
+    border-radius: 6px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    color: #e6edf3;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    transition: all .2s;
+  }
+  button:hover { background: #30363d; border-color: #58a6ff; }
+  button.primary { background: #1f6feb; border-color: #388bfd; }
+  button.primary:hover { background: #388bfd; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  .speed-label { color: #7d8590; font-size: 12px; }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 20px;
+    margin-top: 14px;
+    font-size: 11px;
+    color: #7d8590;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot  { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* WireGuard badge */
+  .wg-badge {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a2332;
+    border: 1px solid #1f6feb;
+    border-radius: 20px;
+    padding: 3px 12px;
+    font-size: 10px;
+    color: #58a6ff;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity .4s;
+  }
+  .wg-badge.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<h1>🔐 infra-gateway — Live Network Flow</h1>
+<p class="subtitle">sfg-labs · Apache APISIX + Zitadel on k3s · Cantech Mumbai DC</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="setScenario('auth')">✅ Authenticated Request</div>
+  <div class="tab" onclick="setScenario('noauth')">🚫 No Token (401)</div>
+  <div class="tab" onclick="setScenario('login')">🔑 Login Flow</div>
+</div>
+
+<div class="canvas" id="canvas">
+
+  <!-- Nodes -->
+  <div class="node node-client"  id="n-client"  style="left:22px;  top:185px;">
+    <div class="node-box" id="b-client"><div class="icon">📱</div><div>Client</div></div>
+    <div class="node-label">Mobile / Web</div>
+  </div>
+
+  <div class="node node-cf" id="n-cf" style="left:155px; top:185px;">
+    <div class="node-box" id="b-cf"><div class="icon">☁️</div><div>Cloudflare</div></div>
+    <div class="node-label">optional · TLS</div>
+  </div>
+
+  <div class="node node-gw" id="n-gw" style="left:310px; top:185px;">
+    <div class="node-box" id="b-gw"><div class="icon">⚡</div><div>APISIX</div></div>
+    <div class="node-label">:9080 · Gateway</div>
+  </div>
+
+  <div class="node node-auth" id="n-auth" style="left:470px; top:330px;">
+    <div class="node-box" id="b-auth"><div class="icon">🔑</div><div>Zitadel</div></div>
+    <div class="node-label">:8080 · Auth Server</div>
+  </div>
+
+  <div class="node node-pod" id="n-nma" style="left:635px; top:80px;">
+    <div class="node-box" id="b-nma"><div class="icon">📊</div><div>NMA Engine</div></div>
+    <div class="node-label">:3000</div>
+  </div>
+
+  <div class="node node-pod" id="n-baithak" style="left:635px; top:210px;">
+    <div class="node-box" id="b-baithak"><div class="icon">🎙️</div><div>Baithak API</div></div>
+    <div class="node-label">:8000</div>
+  </div>
+
+  <div class="node node-pod" id="n-cms" style="left:635px; top:340px;">
+    <div class="node-box" id="b-cms"><div class="icon">🗳️</div><div>CMS API</div></div>
+    <div class="node-label">:8001</div>
+  </div>
+
+  <!-- Static arrows -->
+  <svg class="arrows-svg" id="arrows">
+    <!-- client → cf -->
+    <path id="a-client-cf" class="arrow-path" d="M 134 217 L 155 217"/>
+    <!-- cf → gw -->
+    <path id="a-cf-gw" class="arrow-path" d="M 267 217 L 310 217"/>
+    <!-- gw → auth (down) -->
+    <path id="a-gw-auth" class="arrow-path" d="M 365 250 Q 365 300 470 362"/>
+    <!-- gw → nma -->
+    <path id="a-gw-nma" class="arrow-path" d="M 422 210 L 635 112"/>
+    <!-- gw → baithak -->
+    <path id="a-gw-baithak" class="arrow-path" d="M 422 217 L 635 242"/>
+    <!-- gw → cms -->
+    <path id="a-gw-cms" class="arrow-path" d="M 422 224 L 635 372"/>
+    <!-- response arrows (right to left, dashed by default) -->
+    <path id="a-pod-gw" class="arrow-path" d="M 635 242 L 422 217" opacity=".0"/>
+    <path id="a-gw-client" class="arrow-path" d="M 310 224 L 134 224" opacity=".0"/>
+  </svg>
+
+  <!-- Animated packet -->
+  <div class="packet request" id="packet"></div>
+
+  <!-- WireGuard badge -->
+  <div class="wg-badge" id="wg-badge">🔒 WireGuard encrypted (inter-node)</div>
+</div>
+
+<!-- Step log -->
+<div class="log" id="log">
+  <div class="log-line visible" style="opacity:.5">
+    <span class="log-step">→</span>
+    <span class="log-info">Press Play to see the request flow</span>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <button class="primary" id="btn-play" onclick="play()">▶ Play</button>
+  <button id="btn-reset" onclick="reset()">↺ Reset</button>
+  <span class="speed-label">Speed:</span>
+  <button onclick="setSpeed(1.8)">🐢 Slow</button>
+  <button onclick="setSpeed(1)">Normal</button>
+  <button onclick="setSpeed(0.4)">⚡ Fast</button>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div> Request</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div> Authenticated</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div> Rejected (401)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#bc8cff"></div> Auth / JWKS</div>
+</div>
+
+<script>
+let scenario = 'auth';
+let speedMult = 1;
+let playing = false;
+let steps = [];
+let stepIdx = 0;
+let animFrame = null;
+
+function setScenario(s) {
+  scenario = s;
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
+  const map = {auth:0, noauth:1, login:2};
+  document.querySelectorAll('.tab')[map[s]].classList.add('active');
+  reset();
+}
+
+function setSpeed(s) { speedMult = s; }
+
+function nodeCenter(id) {
+  const n = document.getElementById(id);
+  const c = document.getElementById('canvas').getBoundingClientRect();
+  const r = n.getBoundingClientRect();
+  return {
+    x: r.left - c.left + r.width/2,
+    y: r.top  - c.top  + r.height/2
+  };
+}
+
+function boxById(id) { return document.getElementById(id); }
+
+const glowMap = {
+  'b-client':'active-glow','b-cf':'active-glow','b-gw':'active-glow',
+  'b-auth':'pulse-glow','b-nma':'active-glow','b-baithak':'active-glow','b-cms':'active-glow'
+};
+
+function clearGlows() {
+  ['b-client','b-cf','b-gw','b-auth','b-nma','b-baithak','b-cms'].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.remove('active-glow','error-glow','pulse-glow');
+  });
+}
+
+function clearArrows() {
+  document.querySelectorAll('.arrow-path').forEach(p => {
+    p.classList.remove('active','error','auth-path');
+    p.setAttribute('opacity', '.4');
+  });
+  document.getElementById('a-pod-gw').setAttribute('opacity','0');
+  document.getElementById('a-gw-client').setAttribute('opacity','0');
+}
+
+// Animate packet from one node-box to another
+function animatePacket(fromId, toId, type, dur, onDone) {
+  const pkt = document.getElementById('packet');
+  const canvas = document.getElementById('canvas');
+  const cr = canvas.getBoundingClientRect();
+
+  const fromEl = document.getElementById(fromId);
+  const toEl   = document.getElementById(toId);
+  const fr = fromEl.getBoundingClientRect();
+  const tr = toEl.getBoundingClientRect();
+
+  const x0 = fr.left - cr.left + fr.width/2  - 6;
+  const y0 = fr.top  - cr.top  + fr.height/2 - 6;
+  const x1 = tr.left - cr.left + tr.width/2  - 6;
+  const y1 = tr.top  - cr.top  + tr.height/2 - 6;
+
+  pkt.className = `packet ${type}`;
+  pkt.style.display = 'block';
+  pkt.style.left = x0 + 'px';
+  pkt.style.top  = y0 + 'px';
+  pkt.style.transition = 'none';
+
+  const ms = dur * speedMult * 1000;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      pkt.style.transition = `left ${ms}ms linear, top ${ms}ms linear`;
+      pkt.style.left = x1 + 'px';
+      pkt.style.top  = y1 + 'px';
+      setTimeout(() => {
+        pkt.style.display = 'none';
+        if (onDone) onDone();
+      }, ms);
+    });
+  });
+}
+
+function log(step, text, cls='log-info') {
+  const logEl = document.getElementById('log');
+  if (step === 0) logEl.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-step">${step}.</span><span class="${cls}">${text}</span>`;
+  logEl.appendChild(line);
+  requestAnimationFrame(() => line.classList.add('visible'));
+}
+
+function delay(ms) {
+  return new Promise(r => setTimeout(r, ms * speedMult));
+}
+
+async function runAuth() {
+  const targetPod = 'b-baithak'; // default to Baithak for demo
+
+  log(1, '📡 Client sends  GET /api/meetings  Authorization: Bearer eyJ...', 'log-info');
+  boxById('b-client').classList.add('active-glow');
+  await delay(600);
+
+  animatePacket('b-client','b-cf','request', .5);
+  await delay(600);
+
+  log(2, '☁️  Cloudflare: TLS 1.3 terminated — HTTP forwarded to k3s NodePort :30080', 'log-info');
+  boxById('b-cf').classList.add('active-glow');
+  await delay(700);
+
+  animatePacket('b-cf','b-gw','request',.5);
+  await delay(700);
+
+  log(3, '⚡ APISIX received request — checking: is /api/meetings a public route? NO', 'log-info');
+  boxById('b-gw').classList.add('active-glow');
+  await delay(800);
+
+  log(4, '🔑 Validating JWT signature using cached JWKS from Zitadel (no network call)', 'log-auth');
+  animatePacket('b-gw','b-auth','auth',.4);
+  boxById('b-auth').classList.add('pulse-glow');
+  await delay(700);
+  animatePacket('b-auth','b-gw','auth',.3);
+  await delay(500);
+
+  log(5, '✅ JWT valid  —  user_id=usr_abc  tenant=nma-kota  roles=admin,auditor', 'log-ok');
+  await delay(600);
+
+  log(6, '📨 Injecting headers: X-User-Id · X-User-Email · X-Tenant-Id · X-User-Roles', 'log-ok');
+  document.getElementById('wg-badge').classList.add('visible');
+  await delay(700);
+
+  log(7, '🔒 Forwarding over WireGuard encrypted link to Baithak API :8000', 'log-ok');
+  animatePacket('b-gw', targetPod, 'success', .6);
+  boxById(targetPod).classList.add('active-glow');
+  await delay(800);
+
+  log(8, '🎙️  Baithak reads X-User-Id from header — no JWT code needed — returns 200 OK', 'log-ok');
+  animatePacket(targetPod,'b-gw','success',.5);
+  await delay(600);
+  animatePacket('b-gw','b-cf','success',.4);
+  await delay(500);
+  animatePacket('b-cf','b-client','success',.4);
+  await delay(600);
+
+  log(9, '✅  200 OK  received by client — round trip complete', 'log-ok');
+  document.getElementById('wg-badge').classList.remove('visible');
+}
+
+async function runNoAuth() {
+  log(1, '📡 Client sends  GET /api/audit  (no Authorization header)', 'log-info');
+  boxById('b-client').classList.add('active-glow');
+  await delay(600);
+
+  animatePacket('b-client','b-cf','request',.5);
+  await delay(600);
+  log(2, '☁️  Cloudflare: TLS terminated — forwarded to APISIX :9080', 'log-info');
+  boxById('b-cf').classList.add('active-glow');
+  await delay(600);
+
+  animatePacket('b-cf','b-gw','request',.5);
+  await delay(700);
+
+  log(3, '⚡ APISIX: /api/audit is a protected route — checking Authorization header...', 'log-info');
+  boxById('b-gw').classList.add('active-glow');
+  await delay(700);
+
+  log(4, '🚫 No token found — request REJECTED before pod is ever contacted', 'log-err');
+  boxById('b-gw').classList.remove('active-glow');
+  boxById('b-gw').classList.add('error-glow');
+  await delay(600);
+
+  log(5, '↩️  401 Unauthorized returned immediately — NMA Engine pod never receives request', 'log-err');
+  animatePacket('b-gw','b-cf','error',.4);
+  await delay(500);
+  animatePacket('b-cf','b-client','error',.4);
+  await delay(600);
+
+  log(6, '🔒 Pod is protected — zero load, zero security risk from invalid callers', 'log-err');
+}
+
+async function runLogin() {
+  log(1, '📡 Client sends  POST /auth/v1/users/me/login  {email, password}', 'log-info');
+  boxById('b-client').classList.add('active-glow');
+  await delay(600);
+
+  animatePacket('b-client','b-cf','request',.5);
+  await delay(600);
+
+  log(2, '☁️  Cloudflare: forwards to auth.sfg-labs.in — public route, no JWT check', 'log-info');
+  boxById('b-cf').classList.add('active-glow');
+  await delay(600);
+
+  animatePacket('b-cf','b-gw','request',.4);
+  await delay(500);
+
+  log(3, '⚡ APISIX: /auth/* is a PUBLIC route — forwarding directly to Zitadel', 'log-info');
+  boxById('b-gw').classList.add('active-glow');
+  await delay(600);
+
+  animatePacket('b-gw','b-auth','auth',.5);
+  boxById('b-auth').classList.add('pulse-glow');
+  await delay(800);
+
+  log(4, '🔑 Zitadel: verifies credentials — generates RS256 signed JWT token', 'log-auth');
+  await delay(900);
+
+  log(5, '✅ JWT issued:  access_token + refresh_token  (expires_in: 3600s)', 'log-ok');
+  animatePacket('b-auth','b-gw','auth',.4);
+  await delay(500);
+  animatePacket('b-gw','b-cf','auth',.4);
+  await delay(400);
+  animatePacket('b-cf','b-client','auth',.4);
+  await delay(600);
+
+  log(6, '📱 Client stores token — uses it in Authorization header for all future calls', 'log-ok');
+  await delay(400);
+  log(7, '💡 Switch to "Authenticated Request" to see what happens next →', 'log-info');
+}
+
+async function play() {
+  if (playing) return;
+  playing = true;
+  document.getElementById('btn-play').disabled = true;
+  reset(false);
+
+  try {
+    if (scenario === 'auth')   await runAuth();
+    if (scenario === 'noauth') await runNoAuth();
+    if (scenario === 'login')  await runLogin();
+  } finally {
+    playing = false;
+    document.getElementById('btn-play').disabled = false;
+  }
+}
+
+function reset(clearLog=true) {
+  playing = false;
+  document.getElementById('btn-play').disabled = false;
+  document.getElementById('packet').style.display = 'none';
+  document.getElementById('wg-badge').classList.remove('visible');
+  clearGlows();
+  clearArrows();
+  if (clearLog) {
+    const logEl = document.getElementById('log');
+    logEl.innerHTML = `<div class="log-line visible" style="opacity:.5">
+      <span class="log-step">→</span>
+      <span class="log-info">Press Play to see the request flow</span>
+    </div>`;
+  }
+}
+</script>
+</body>
+</html>
