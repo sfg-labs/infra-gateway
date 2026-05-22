@@ -18,6 +18,7 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${KUBE_VERSION}" \
   K3S_TOKEN="${NODE_TOKEN}" \
   sh -s - agent \
   --node-label="sfg-role=${WORKER_LABEL}"
+  # WireGuard backend is inherited from master — worker joins encrypted overlay automatically
 
 echo "===> [3/3] Verifying agent is running"
 systemctl status k3s-agent --no-pager
