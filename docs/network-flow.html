@@ -193,6 +193,8 @@
   button.primary { background: #1f6feb; border-color: #388bfd; }
   button.primary:hover { background: #388bfd; }
   button:disabled { opacity: .4; cursor: default; }
+  button.danger { background: #da3633; border-color: #f85149; }
+  button.danger:hover { background: #f85149; }
 
   .speed-label { color: #7d8590; font-size: 12px; }
 
@@ -312,6 +314,7 @@
 <!-- Controls -->
 <div class="controls">
   <button class="primary" id="btn-play" onclick="play()">▶ Play</button>
+  <button class="danger" id="btn-stop" onclick="stop()" disabled>■ Stop</button>
   <button id="btn-reset" onclick="reset()">↺ Reset</button>
   <span class="speed-label">Speed:</span>
   <button onclick="setSpeed(1.8)">🐢 Slow</button>
@@ -330,8 +333,7 @@
 let scenario = 'auth';
 let speedMult = 1;
 let playing = false;
-let steps = [];
-let stepIdx = 0;
+let stopped = false;
 let animFrame = null;
 
 function setScenario(s) {
@@ -424,7 +426,13 @@ function log(step, text, cls='log-info') {
 }
 
 function delay(ms) {
-  return new Promise(r => setTimeout(r, ms * speedMult));
+  return new Promise((r, reject) => {
+    const t = setTimeout(r, ms * speedMult);
+    const check = setInterval(() => {
+      if (stopped) { clearTimeout(t); clearInterval(check); reject('stopped'); }
+    }, 50);
+    setTimeout(() => clearInterval(check), ms * speedMult + 100);
+  });
 }
 
 async function runAuth() {
@@ -552,23 +560,49 @@ async function runLogin() {
 
 async function play() {
   if (playing) return;
+  stopped = false;
   playing = true;
   document.getElementById('btn-play').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
   reset(false);
 
   try {
     if (scenario === 'auth')   await runAuth();
     if (scenario === 'noauth') await runNoAuth();
     if (scenario === 'login')  await runLogin();
+  } catch(e) {
+    // stopped mid-animation — leave current visual state
   } finally {
     playing = false;
+    stopped = false;
     document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-stop').disabled = true;
+    // update play button to show replay if finished
+    const btn = document.getElementById('btn-play');
+    btn.textContent = '↺ Play Again';
+    setTimeout(() => { btn.textContent = '▶ Play'; }, 3000);
   }
 }
 
+function stop() {
+  stopped = true;
+  document.getElementById('btn-stop').disabled = true;
+  document.getElementById('packet').style.display = 'none';
+  document.getElementById('wg-badge').classList.remove('visible');
+
+  const logEl = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = 'log-line visible';
+  line.innerHTML = `<span class="log-step">■</span><span style="color:#7d8590">Stopped — press Play to run again</span>`;
+  logEl.appendChild(line);
+}
+
 function reset(clearLog=true) {
+  stopped = true;
   playing = false;
   document.getElementById('btn-play').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  document.getElementById('btn-play').textContent = '▶ Play';
   document.getElementById('packet').style.display = 'none';
   document.getElementById('wg-badge').classList.remove('visible');
   clearGlows();
@@ -580,6 +614,7 @@ function reset(clearLog=true) {
       <span class="log-info">Press Play to see the request flow</span>
     </div>`;
   }
+  stopped = false;
 }
 </script>
 </body>

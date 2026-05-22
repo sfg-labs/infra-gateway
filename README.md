@@ -16,6 +16,24 @@ Services receive validated user context as HTTP headers — zero auth code neede
 
 ---
 
+## Interactive Network Flow
+
+> See exactly how a request travels from a mobile app to a pod — animated, step by step.
+
+**[▶ Open Interactive Flow →](https://sfg-labs.github.io/infra-gateway/network-flow.html)**
+
+Three scenarios you can run:
+| Scenario | What it shows |
+|----------|--------------|
+| ✅ Authenticated Request | Full path — Client → Cloudflare → APISIX → JWT check → Pod → Response |
+| 🚫 No Token | APISIX blocks at the gateway, pod never contacted, 401 returned |
+| 🔑 Login Flow | How a JWT token is issued by Zitadel |
+
+Controls: **Play · Stop · Play Again · Speed (Slow / Normal / Fast)**  
+Open locally: `open docs/network-flow.html`
+
+---
+
 ## Network Flow
 
 ```
