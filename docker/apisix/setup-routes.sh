@@ -106,6 +106,7 @@ create_upstream "1" "mock-backend:80"    # NMA engine (mock)
 create_upstream "2" "mock-backend:80"    # Baithak (mock)
 create_upstream "3" "mock-backend:80"    # CMS (mock)
 create_upstream "4" "zitadel:8080"       # Zitadel auth
+create_upstream "5" "mock-backend:80"    # Suwalka HR/Payroll (mock)
 
 echo ""
 echo "===> Creating routes"
@@ -125,15 +126,24 @@ create_health_route "41" "baithak-health" "api.baithak.localhost" "2"
 create_route "50" "cms-api"       "api.cms.localhost"     "/api/"   "3" "true"
 create_health_route "51" "cms-health"    "api.cms.localhost"     "3"
 
+# Protected: Suwalka HR/Payroll (JWT required)
+# Local host: api.suwalka.localhost  Path prefix: /api/hr/
+# Upstream 5 → mock-backend:80 (the actual service is not in the Docker compose stack;
+# mock-backend stands in for local smoke testing, same pattern as other services above).
+create_route "60" "suwalka-hr-api" "api.suwalka.localhost" "/api/hr/" "5" "true"
+create_health_route "61" "suwalka-hr-health" "api.suwalka.localhost" "5"
+
 echo ""
 echo "========================================================"
 echo "  Routes configured. Test with:"
 echo ""
 echo "  # Health (public, expect 200):"
 echo "  curl -H 'Host: api.nma.localhost' http://localhost:9080/health"
+echo "  curl -H 'Host: api.suwalka.localhost' http://localhost:9080/healthz"
 echo ""
 echo "  # Protected without token (expect 401):"
 echo "  curl -H 'Host: api.nma.localhost' http://localhost:9080/api/audit"
+echo "  curl -H 'Host: api.suwalka.localhost' http://localhost:9080/api/hr/employees"
 echo ""
 echo "  # Zitadel OIDC discovery:"
 echo "  curl http://localhost:8080/.well-known/openid-configuration | jq .issuer"

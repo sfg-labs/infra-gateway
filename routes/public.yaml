@@ -123,3 +123,19 @@ spec:
       serviceNamespace: sfg-apps
       servicePort: 8001
       weight: 100
+
+  # Suwalka HR/Payroll health check — /healthz (service uses /healthz, not /health)
+  # serviceNamespace is sfg-labs — see suwalka-org-hr-payroll.yaml for rationale.
+  - name: suwalka-hr-health
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      paths:
+      - /healthz
+      methods:
+      - GET
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      serviceNamespace: sfg-labs
+      servicePort: 3001
+      weight: 100
