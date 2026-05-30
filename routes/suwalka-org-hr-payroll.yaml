@@ -1,0 +1,79 @@
+# NAMESPACE NOTE: serviceNamespace below is sfg-labs, which differs from all other
+# projects in this gateway repo (they use sfg-apps). sfg-labs is correct for Suwalka
+# services per CLAUDE.md and the confirmed k8s Service definition. Do NOT change it to
+# sfg-apps without explicit sign-off from the platform team, or the route will point at
+# a namespace where no Suwalka pod exists.
+#
+# OPEN QUESTIONS FOR PLATFORM TEAM (2026-05-28):
+#   1. Confirm sfg-labs namespace is accepted by the APISIX CRD watcher on this cluster.
+#      All other projects live in sfg-apps; this is the first cross-namespace backend.
+#   2. Confirm Zitadel realm name "suwalka" is provisioned. If the realm is named
+#      differently in Zitadel (e.g. "suwalka-pos"), update the `realm:` field below.
+#   3. X-Tenant-Id / X-Branch-Id injection: no existing route in this repo explicitly
+#      injects these headers via a proxy-rewrite plugin. Confirm whether Zitadel custom
+#      claims flow them through the X-Userinfo blob (parsed by readUser()) or whether a
+#      dedicated proxy-rewrite block is needed.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-org-hr-payroll
+  namespace: sfg-gateway
+  labels:
+    sfg-project: suwalka
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — Org / HR / Payroll service API"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "suwalka-org-hr-payroll:3001"
+spec:
+  http:
+  - name: suwalka-org-hr-payroll-api
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      paths:
+      - /api/hr/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      serviceNamespace: sfg-labs   # see namespace note at top of file
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        bearer_only: true
+        realm: suwalka
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka
