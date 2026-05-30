@@ -1,0 +1,64 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-inventory-pricing
+  namespace: sfg-gateway
+  labels:
+    sfg-project: suwalka
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — Inventory & Pricing service"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "suwalka-inventory-pricing:3004"
+spec:
+  http:
+  - name: suwalka-inventory-pricing-api
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      paths:
+      - /api/inventory-pricing/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: suwalka-inventory-pricing
+      serviceNamespace: sfg-labs
+      servicePort: 3004
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        bearer_only: true
+        realm: suwalka
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka
