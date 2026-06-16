@@ -5,11 +5,11 @@ name: CD
 # push. (To auto-deploy on merge, add `push: { branches: [main] }` below.)
 #
 # Required GitHub Secrets (Settings → Secrets and variables → Actions):
-#   DIGITALOCEAN_ACCESS_TOKEN  DO API token (the dop_v1_… from your kubeconfig works)
-#   DOKS_CLUSTER_ID            cluster UUID, e.g. b1d60ed2-60f4-4c23-aa68-b3041727bcf9
-#   ZITADEL_DB_PASSWORD        Postgres password for the zitadel role (any strong value)
-#   ZITADEL_MASTERKEY          Zitadel master key — MUST be exactly 32 characters
-#   APISIX_ADMIN_KEY           APISIX admin API key (any strong value)
+#   DOKS_KUBECONFIG      full contents of your DigitalOcean cluster kubeconfig file
+#                        (the embedded token authenticates kubectl directly — no doctl/PAT)
+#   ZITADEL_DB_PASSWORD  Postgres password for the zitadel role (any strong value)
+#   ZITADEL_MASTERKEY    Zitadel master key — MUST be exactly 32 characters
+#   APISIX_ADMIN_KEY     APISIX admin API key (any strong value)
 
 on:
   workflow_dispatch:
@@ -27,6 +27,8 @@ jobs:
   deploy:
     name: Deploy to DOKS
     runs-on: ubuntu-latest
+    env:
+      KUBECONFIG: ${{ github.workspace }}/.kubeconfig
     steps:
       - name: Guard — require explicit confirmation
         run: |
@@ -36,11 +38,6 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
-
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
@@ -52,8 +49,12 @@ jobs:
         with:
           version: v3.14.0
 
-      - name: Save DOKS kubeconfig
-        run: doctl kubernetes cluster kubeconfig save "${{ secrets.DOKS_CLUSTER_ID }}"
+      - name: Write kubeconfig from secret
+        env:
+          DOKS_KUBECONFIG: ${{ secrets.DOKS_KUBECONFIG }}
+        run: |
+          printf '%s' "$DOKS_KUBECONFIG" > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
 
       - name: Verify cluster access
         run: kubectl get nodes
