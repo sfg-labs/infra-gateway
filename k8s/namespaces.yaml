@@ -1,0 +1,31 @@
+# Namespaces for the sfg-labs gateway platform. Applied (idempotently) before any
+# Helm release or route. Declarative so they are version-controlled and reviewable —
+# unlike Secrets, which must be created imperatively from GitHub Secrets at deploy time.
+#
+#   sfg-gateway — APISIX, Zitadel, the ingress controller, and Zitadel's Postgres
+#   sfg-apps    — NMA / Baithak / CMS backend pods
+#   sfg-labs    — Suwalka Motors backend pods (see routes/suwalka-*.yaml)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sfg-gateway
+  labels:
+    app.kubernetes.io/part-of: sfg-gateway
+    sfg-labs.in/tier: gateway
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sfg-apps
+  labels:
+    app.kubernetes.io/part-of: sfg-gateway
+    sfg-labs.in/tier: backend
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sfg-labs
+  labels:
+    app.kubernetes.io/part-of: sfg-gateway
+    sfg-labs.in/tier: backend

@@ -1,0 +1,95 @@
+# In-cluster PostgreSQL for Zitadel — DOKS deployment.
+#
+# Replaces the Cantech VLAN db-01 host (10.0.0.4) referenced by the original
+# helm/zitadel/values.yaml. Uses the official postgres image (same one this repo's
+# docker-compose.yml uses locally) to avoid the Bitnami image-registry deprecation.
+#
+# With POSTGRES_USER=zitadel the "zitadel" role IS the superuser, so Zitadel uses it
+# for both its runtime (User) and admin (Admin) connections — see values.yaml.
+#
+# The password is NOT stored here: it is read from the zitadel-db Secret, which the
+# CD pipeline (.github/workflows/cd.yaml) creates from the ZITADEL_DB_PASSWORD GitHub
+# Secret. Both this DB and Zitadel read the same secret, so they always match.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zitadel-db-postgresql        # ← Zitadel's Database.Postgres.Host resolves to this
+  namespace: sfg-gateway
+  labels:
+    app: zitadel-db-postgresql
+spec:
+  type: ClusterIP
+  selector:
+    app: zitadel-db-postgresql
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zitadel-db-postgresql
+  namespace: sfg-gateway
+  labels:
+    app: zitadel-db-postgresql
+spec:
+  serviceName: zitadel-db-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zitadel-db-postgresql
+  template:
+    metadata:
+      labels:
+        app: zitadel-db-postgresql
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: zitadel
+            - name: POSTGRES_DB
+              value: zitadel
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: zitadel-db
+                  key: admin-password
+            # Keep data out of the volume mount root (avoids lost+found init failure).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "zitadel", "-d", "zitadel"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "zitadel", "-d", "zitadel"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: do-block-storage
+        resources:
+          requests:
+            storage: 8Gi

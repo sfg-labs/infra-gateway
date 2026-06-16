@@ -1,0 +1,112 @@
+name: CD
+
+# Deploys the gateway (Postgres + Zitadel + APISIX + routes) to the DigitalOcean
+# Kubernetes cluster. Manual trigger only — a gateway should not redeploy on every
+# push. (To auto-deploy on merge, add `push: { branches: [main] }` below.)
+#
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#   DIGITALOCEAN_ACCESS_TOKEN  DO API token (the dop_v1_… from your kubeconfig works)
+#   DOKS_CLUSTER_ID            cluster UUID, e.g. b1d60ed2-60f4-4c23-aa68-b3041727bcf9
+#   ZITADEL_DB_PASSWORD        Postgres password for the zitadel role (any strong value)
+#   ZITADEL_MASTERKEY          Zitadel master key — MUST be exactly 32 characters
+#   APISIX_ADMIN_KEY           APISIX admin API key (any strong value)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm a production gateway deploy'
+        required: true
+        default: ''
+
+concurrency:
+  group: cd-doks
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to DOKS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard — require explicit confirmation
+        run: |
+          if [[ "${{ github.event.inputs.confirm }}" != "deploy" ]]; then
+            echo "::error::Type 'deploy' in the confirm input to run this workflow."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Save DOKS kubeconfig
+        run: doctl kubernetes cluster kubeconfig save "${{ secrets.DOKS_CLUSTER_ID }}"
+
+      - name: Verify cluster access
+        run: kubectl get nodes
+
+      - name: Ensure namespaces
+        run: kubectl apply -f k8s/namespaces.yaml
+
+      - name: Create secrets from GitHub Secrets
+        env:
+          ZITADEL_DB_PASSWORD: ${{ secrets.ZITADEL_DB_PASSWORD }}
+          ZITADEL_MASTERKEY: ${{ secrets.ZITADEL_MASTERKEY }}
+          APISIX_ADMIN_KEY: ${{ secrets.APISIX_ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${#ZITADEL_MASTERKEY}" -ne 32 ]]; then
+            echo "::error::ZITADEL_MASTERKEY must be exactly 32 characters (got ${#ZITADEL_MASTERKEY})."
+            exit 1
+          fi
+
+          # zitadel-db — same value for the runtime (User) and admin connections,
+          # since the postgres container's POSTGRES_USER=zitadel is the superuser.
+          kubectl -n sfg-gateway create secret generic zitadel-db \
+            --from-literal=user-password="$ZITADEL_DB_PASSWORD" \
+            --from-literal=admin-password="$ZITADEL_DB_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # zitadel-masterkey — referenced by helm/zitadel/values.yaml (masterkeySecretName).
+          kubectl -n sfg-gateway create secret generic zitadel-masterkey \
+            --from-literal=masterkey="$ZITADEL_MASTERKEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # apisix-admin-key — helm/deploy.sh reads this and wires it into the chart.
+          kubectl -n sfg-gateway create secret generic apisix-admin-key \
+            --from-literal=key="$APISIX_ADMIN_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy in-cluster Postgres
+        run: |
+          set -euo pipefail
+          kubectl apply -f helm/zitadel/postgres.yaml
+          echo "Waiting for Postgres to become ready..."
+          kubectl -n sfg-gateway rollout status statefulset/zitadel-db-postgresql --timeout=180s
+
+      - name: Deploy gateway (Zitadel + APISIX + routes)
+        run: bash helm/deploy.sh
+
+      - name: Report deployment state
+        if: always()
+        run: |
+          echo "===> Services (look for the APISIX LoadBalancer EXTERNAL-IP)"
+          kubectl -n sfg-gateway get svc -o wide || true
+          echo "===> ApisixRoutes"
+          kubectl -n sfg-gateway get apisixroutes || true
+          echo "===> Pods"
+          kubectl -n sfg-gateway get pods -o wide || true

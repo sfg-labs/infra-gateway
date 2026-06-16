@@ -14,9 +14,8 @@ helm repo add apisix  https://charts.apiseven.com  2>/dev/null || true
 helm repo add zitadel https://charts.zitadel.com   2>/dev/null || true
 helm repo update
 
-echo "===> [2/5] Ensuring namespace ${NAMESPACE} exists"
-kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace sfg-apps       --dry-run=client -o yaml | kubectl apply -f -
+echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs)"
+kubectl apply -f k8s/namespaces.yaml
 
 echo "===> [3/5] Installing Zitadel"
 # Zitadel must be deployed before APISIX so its service is reachable for OIDC discovery

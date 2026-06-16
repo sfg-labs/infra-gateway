@@ -9,7 +9,7 @@
 #   kubectl -n sfg-gateway create secret generic zitadel-db \
 #     --from-literal=password=YOUR_POSTGRES_PASSWORD
 
-replicaCount: 2
+replicaCount: 1   # single-node DOKS cluster — anti-affinity gives no HA on one node
 
 zitadel:
   # The masterkey secret must be created manually before deploy (see above)
@@ -25,25 +25,39 @@ zitadel:
 
     Database:
       Postgres:
-        Host: "10.0.0.4"          # ← db-01 private IP on Cantech VLAN
+        # In-cluster Bitnami Postgres (deployed as release "zitadel-db" in sfg-gateway).
+        # Was 10.0.0.4 (Cantech VLAN db-01) — does not exist on DOKS.
+        Host: "zitadel-db-postgresql.sfg-gateway.svc.cluster.local"
         Port: 5432
         Database: zitadel
-        User: zitadel
-        SSL:
-          Mode: disable            # private VLAN, no SSL needed
+        # Runtime user — owns the zitadel database (created by Bitnami auth.username).
+        User:
+          Username: zitadel
+          # Password injected via ZITADEL_DATABASE_POSTGRES_USER_PASSWORD env (see below).
+          SSL:
+            Mode: disable          # in-cluster traffic; use "require" for DO Managed Postgres
+        # Admin user — used by the init job to create the DB/role and run migrations.
+        # With the official postgres image + POSTGRES_USER=zitadel, "zitadel" IS the
+        # superuser, so the runtime and admin connections use the same role.
+        Admin:
+          Username: zitadel
+          # Password injected via ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD env (see below).
+          SSL:
+            Mode: disable
 
-  secretConfig:
-    Database:
-      Postgres:
-        Password: ""               # injected from zitadel-db secret below
-
-  # Reference the DB password secret
+  # DB passwords injected from the zitadel-db secret (created manually before deploy).
+  # Env-var names follow Zitadel's ZITADEL_<PATH>_<TO>_<KEY> convention (see docker-compose.yml).
   env:
-    - name: ZITADEL_DATABASE_POSTGRES_PASSWORD
+    - name: ZITADEL_DATABASE_POSTGRES_USER_PASSWORD
       valueFrom:
         secretKeyRef:
           name: zitadel-db
-          key: password
+          key: user-password
+    - name: ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: zitadel-db
+          key: admin-password
 
 resources:
   requests:

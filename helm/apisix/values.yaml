@@ -2,7 +2,7 @@
 # Chart: apisix/apisix  (helm repo add apisix https://charts.apiseven.com)
 # Deployed to namespace: sfg-gateway
 
-replicaCount: 2
+replicaCount: 1   # single-node DOKS cluster — anti-affinity gives no HA on one node
 
 apisix:
   enabled: true
@@ -48,14 +48,15 @@ apisix:
           topologyKey: kubernetes.io/hostname
 
 gateway:
-  type: NodePort
+  # DOKS provisions a DigitalOcean LoadBalancer for type: LoadBalancer (public IP).
+  # Was NodePort:30080 for k3s (no cloud LB there).
+  type: LoadBalancer
   http:
     enabled: true
     servicePort: 80
     containerPort: 9080
-    nodePort: 30080
   tls:
-    enabled: false   # TLS terminated at Cloudflare / external LB
+    enabled: false   # TLS terminated at Cloudflare / DO LB (add cert-manager later)
 
 # etcd — single replica for Y1, set replicaCount: 3 for HA
 etcd:
@@ -91,6 +92,7 @@ ingress-controller:
       watchNamespaces:
         - sfg-gateway
         - sfg-apps
+        - sfg-labs     # Suwalka services live here (see routes/suwalka-*.yaml)
 
   resources:
     requests:
