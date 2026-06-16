@@ -2,15 +2,21 @@
 # Covers: Zitadel auth endpoints, health checks, Razorpay webhooks.
 # WARNING: Adding a path here means ANY caller can reach it unauthenticated.
 #          Review every addition carefully before merging.
+#
+# NOTE: This APISIX ingress controller (ApisixRoute apisix.apache.org/v2) routes only to
+# Services in the ApisixRoute's OWN namespace — there is no backends[].serviceNamespace.
+# So the public routes are split into one ApisixRoute per backend namespace.
+---
+# --- sfg-gateway backends (Zitadel) ---
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
-  name: public-routes
+  name: public-routes-gateway
   namespace: sfg-gateway
   labels:
     sfg-auth: public
   annotations:
-    sfg-labs.in/description: "Public routes — login, health, webhooks"
+    sfg-labs.in/description: "Public routes — Zitadel auth server"
 spec:
   http:
 
@@ -23,7 +29,6 @@ spec:
       - /*
     backends:
     - serviceName: sfg-zitadel
-      serviceNamespace: sfg-gateway
       servicePort: 8080
       weight: 100
     plugins:
@@ -40,6 +45,19 @@ spec:
         rejected_code: 429
         key_type: var
         key: remote_addr
+---
+# --- sfg-apps backends (NMA / Baithak / CMS) ---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: public-routes-apps
+  namespace: sfg-apps
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes — NMA/Baithak/CMS health + webhooks"
+spec:
+  http:
 
   # NMA health check — explicit paths only, no wildcard
   - name: nma-health
@@ -54,7 +72,6 @@ spec:
       - GET
     backends:
     - serviceName: nma-india-engine
-      serviceNamespace: sfg-apps
       servicePort: 3000
       weight: 100
 
@@ -71,7 +88,6 @@ spec:
       - GET
     backends:
     - serviceName: baithak-api
-      serviceNamespace: sfg-apps
       servicePort: 8000
       weight: 100
 
@@ -89,7 +105,6 @@ spec:
       - POST
     backends:
     - serviceName: baithak-api
-      serviceNamespace: sfg-apps
       servicePort: 8000
       weight: 100
     plugins:
@@ -120,12 +135,23 @@ spec:
       - GET
     backends:
     - serviceName: cms-api
-      serviceNamespace: sfg-apps
       servicePort: 8001
       weight: 100
+---
+# --- sfg-labs backends (Suwalka) ---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: public-routes-suwalka
+  namespace: sfg-labs
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes — Suwalka health"
+spec:
+  http:
 
   # Suwalka HR/Payroll health check — /healthz (service uses /healthz, not /health)
-  # serviceNamespace is sfg-labs — see suwalka-org-hr-payroll.yaml for rationale.
   - name: suwalka-hr-health
     match:
       hosts:
@@ -136,6 +162,5 @@ spec:
       - GET
     backends:
     - serviceName: suwalka-org-hr-payroll
-      serviceNamespace: sfg-labs
       servicePort: 3001
       weight: 100

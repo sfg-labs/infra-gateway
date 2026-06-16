@@ -1,15 +1,13 @@
-# NAMESPACE NOTE: serviceNamespace below is sfg-labs, which differs from all other
-# projects in this gateway repo (they use sfg-apps). sfg-labs is correct for Suwalka
-# services per CLAUDE.md and the confirmed k8s Service definition. Do NOT change it to
-# sfg-apps without explicit sign-off from the platform team, or the route will point at
-# a namespace where no Suwalka pod exists.
+# NAMESPACE NOTE: this ApisixRoute lives in sfg-labs (set via metadata.namespace) because
+# the APISIX ingress controller (ApisixRoute v2) routes only to Services in the route's OWN
+# namespace — backends[].serviceNamespace is not supported. All Suwalka routes therefore live
+# in sfg-labs, alongside the suwalka-* Service objects. sfg-labs (not sfg-apps) is correct for
+# Suwalka per CLAUDE.md and the confirmed k8s Service definition.
 #
-# OPEN QUESTIONS FOR PLATFORM TEAM (2026-05-28):
-#   1. Confirm sfg-labs namespace is accepted by the APISIX CRD watcher on this cluster.
-#      All other projects live in sfg-apps; this is the first cross-namespace backend.
-#   2. Confirm Zitadel realm name "suwalka" is provisioned. If the realm is named
+# OPEN QUESTIONS FOR PLATFORM TEAM:
+#   1. Confirm Zitadel realm name "suwalka" is provisioned. If the realm is named
 #      differently in Zitadel (e.g. "suwalka-pos"), update the `realm:` field below.
-#   3. X-Tenant-Id / X-Branch-Id injection: no existing route in this repo explicitly
+#   2. X-Tenant-Id / X-Branch-Id injection: no existing route in this repo explicitly
 #      injects these headers via a proxy-rewrite plugin. Confirm whether Zitadel custom
 #      claims flow them through the X-Userinfo blob (parsed by readUser()) or whether a
 #      dedicated proxy-rewrite block is needed.
@@ -17,7 +15,7 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-org-hr-payroll
-  namespace: sfg-gateway
+  namespace: sfg-labs
   labels:
     sfg-project: suwalka
     sfg-auth: jwt
@@ -41,7 +39,6 @@ spec:
       - DELETE
     backends:
     - serviceName: suwalka-org-hr-payroll
-      serviceNamespace: sfg-labs   # see namespace note at top of file
       servicePort: 3001
       weight: 100
     plugins:

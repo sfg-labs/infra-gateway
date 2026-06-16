@@ -2,7 +2,7 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-notification
-  namespace: sfg-gateway
+  namespace: sfg-labs
   labels:
     sfg-project: suwalka
     sfg-auth: jwt
@@ -26,7 +26,6 @@ spec:
       - DELETE
     backends:
     - serviceName: suwalka-notification
-      serviceNamespace: sfg-labs
       servicePort: 3007
       weight: 100
     plugins:

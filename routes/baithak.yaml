@@ -2,7 +2,7 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: baithak-api
-  namespace: sfg-gateway
+  namespace: sfg-apps
   labels:
     sfg-project: baithak
     sfg-auth: jwt
@@ -29,7 +29,6 @@ spec:
       - DELETE
     backends:
     - serviceName: baithak-api
-      serviceNamespace: sfg-apps
       servicePort: 8000
       weight: 100
     plugins:
@@ -75,7 +74,6 @@ spec:
       - /ws/*
     backends:
     - serviceName: baithak-api
-      serviceNamespace: sfg-apps
       servicePort: 8000
       weight: 100
     websocket: true

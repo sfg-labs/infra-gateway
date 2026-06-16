@@ -2,7 +2,7 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: cms-api
-  namespace: sfg-gateway
+  namespace: sfg-apps
   labels:
     sfg-project: cms
     sfg-auth: jwt
@@ -29,7 +29,6 @@ spec:
       - DELETE
     backends:
     - serviceName: cms-api
-      serviceNamespace: sfg-apps
       servicePort: 8001
       weight: 100
     plugins:
