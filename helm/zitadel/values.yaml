@@ -45,19 +45,20 @@ zitadel:
           SSL:
             Mode: disable
 
-  # DB passwords injected from the zitadel-db secret (created manually before deploy).
-  # Env-var names follow Zitadel's ZITADEL_<PATH>_<TO>_<KEY> convention (see docker-compose.yml).
-  env:
-    - name: ZITADEL_DATABASE_POSTGRES_USER_PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: zitadel-db
-          key: user-password
-    - name: ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: zitadel-db
-          key: admin-password
+# Top-level env (NOT zitadel.env). The chart's zitadel.dbEnv helper injects .Values.env
+# into the init/setup pre-install hook jobs AND the main deployment — so the DB password
+# reaches the init job (zitadel.env does not). Passwords come from the zitadel-db secret.
+env:
+  - name: ZITADEL_DATABASE_POSTGRES_USER_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: zitadel-db
+        key: user-password
+  - name: ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: zitadel-db
+        key: admin-password
 
 resources:
   requests:
