@@ -47,16 +47,16 @@ apisix:
               values: [apisix]
           topologyKey: kubernetes.io/hostname
 
-gateway:
-  # DOKS provisions a DigitalOcean LoadBalancer for type: LoadBalancer (public IP).
-  # Was NodePort:30080 for k3s (no cloud LB there).
+# Gateway Service. The apisix chart's key is `service.*` (NOT `gateway.*`); its default
+# type is NodePort. type: LoadBalancer makes DOKS provision a DigitalOcean LoadBalancer
+# with a public IP. TLS is terminated at the LB/Cloudflare, so no service TLS here.
+service:
   type: LoadBalancer
+  externalTrafficPolicy: Cluster
   http:
     enabled: true
     servicePort: 80
     containerPort: 9080
-  tls:
-    enabled: false   # TLS terminated at Cloudflare / DO LB (add cert-manager later)
 
 # etcd — single replica for Y1, set replicaCount: 3 for HA
 etcd:
