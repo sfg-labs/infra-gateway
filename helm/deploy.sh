@@ -10,8 +10,11 @@ DRY_RUN=""
 NAMESPACE="sfg-gateway"
 
 echo "===> [1/5] Adding Helm repos"
-helm repo add apisix  https://charts.apiseven.com  2>/dev/null || true
-helm repo add zitadel https://charts.zitadel.com   2>/dev/null || true
+# Canonical APISIX chart repo. charts.apiseven.com now 301-redirects here and the redirect
+# can hang/fail on CI runners, so point directly at the GitHub Pages URL.
+# --force-update makes re-adding an existing repo idempotent without masking real errors.
+helm repo add apisix  https://apache.github.io/apisix-helm-chart --force-update
+helm repo add zitadel https://charts.zitadel.com                 --force-update
 helm repo update
 
 echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs)"
