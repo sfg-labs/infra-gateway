@@ -11,6 +11,7 @@ metadata:
     sfg-labs.in/team: "suwalka-team"
     sfg-labs.in/upstream: "suwalka-notification:3007"
 spec:
+  ingressClassName: apisix
   http:
   - name: suwalka-notification-api
     match:

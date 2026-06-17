@@ -11,6 +11,7 @@ metadata:
     sfg-labs.in/team: "baithak-team"
     sfg-labs.in/upstream: "baithak-api:8000"
 spec:
+  ingressClassName: apisix
   http:
   - name: baithak-protected-api
     match:

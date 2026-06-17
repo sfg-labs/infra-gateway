@@ -11,6 +11,7 @@ metadata:
     sfg-labs.in/team: "suwalka-team"
     sfg-labs.in/upstream: "suwalka-tasks:3005"
 spec:
+  ingressClassName: apisix
   http:
   - name: suwalka-tasks-api
     match:

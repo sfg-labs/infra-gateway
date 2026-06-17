@@ -24,6 +24,7 @@ metadata:
     sfg-labs.in/team: "suwalka-team"
     sfg-labs.in/upstream: "suwalka-org-hr-payroll:3001"
 spec:
+  ingressClassName: apisix
   http:
   - name: suwalka-org-hr-payroll-api
     match:

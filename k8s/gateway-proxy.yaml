@@ -1,0 +1,28 @@
+# GatewayProxy — tells the APISIX ingress controller (v2, apache/apisix-ingress-controller:2.x)
+# HOW to reach the APISIX data plane's Admin API and WITH WHICH key. The v2 controller does
+# nothing with ApisixRoutes until an IngressClass points at this object (see k8s/ingressclass.yaml).
+# Without it the controller logs: "no GatewayProxy configs provided" and every route returns
+# 404 Route Not Found.
+#
+# The adminKey here MUST match the data plane's admin_key. That key lives in the apisix-admin-key
+# Secret (created from GitHub Secrets by .github/workflows/cd.yaml) AND must be the same value the
+# APISIX chart configured for the data plane (helm/deploy.sh passes it via
+# --set apisix.admin.credentials.admin).
+apiVersion: apisix.apache.org/v1alpha1
+kind: GatewayProxy
+metadata:
+  name: apisix-config
+  namespace: sfg-gateway
+spec:
+  provider:
+    type: ControlPlane
+    controlPlane:
+      endpoints:
+        - http://sfg-apisix-admin.sfg-gateway.svc.cluster.local:9180
+      auth:
+        type: AdminKey
+        adminKey:
+          valueFrom:
+            secretKeyRef:
+              name: apisix-admin-key
+              key: key

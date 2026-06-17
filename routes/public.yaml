@@ -18,6 +18,7 @@ metadata:
   annotations:
     sfg-labs.in/description: "Public routes — Zitadel auth server"
 spec:
+  ingressClassName: apisix
   http:
 
   # Zitadel auth server — all traffic, no JWT check (Zitadel handles its own auth)
@@ -57,6 +58,7 @@ metadata:
   annotations:
     sfg-labs.in/description: "Public routes — NMA/Baithak/CMS health + webhooks"
 spec:
+  ingressClassName: apisix
   http:
 
   # NMA health check — explicit paths only, no wildcard
@@ -149,6 +151,7 @@ metadata:
   annotations:
     sfg-labs.in/description: "Public routes — Suwalka health"
 spec:
+  ingressClassName: apisix
   http:
 
   # Suwalka HR/Payroll health check — /healthz (service uses /healthz, not /health)

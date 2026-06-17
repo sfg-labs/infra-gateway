@@ -1,0 +1,17 @@
+# IngressClass for the APISIX v2 ingress controller. The chart creates an "apisix" IngressClass
+# but WITHOUT spec.parameters, so it points at no GatewayProxy and no routes are programmed.
+# This manifest adds the parameters link to the GatewayProxy (k8s/gateway-proxy.yaml).
+#
+# Every ApisixRoute must set `spec.ingressClassName: apisix` to be claimed by this class.
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: apisix
+spec:
+  controller: apisix.apache.org/apisix-ingress-controller
+  parameters:
+    apiGroup: apisix.apache.org
+    kind: GatewayProxy
+    name: apisix-config
+    namespace: sfg-gateway
+    scope: Namespace

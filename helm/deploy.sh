@@ -48,10 +48,19 @@ fi
 helm upgrade --install sfg-apisix apisix/apisix \
   --namespace "${NAMESPACE}" \
   --values helm/apisix/values.yaml \
+  ${APISIX_ADMIN_KEY:+--set "apisix.admin.credentials.admin=${APISIX_ADMIN_KEY}"} \
   ${APISIX_ADMIN_KEY:+--set "ingress-controller.config.apisix.adminKey=${APISIX_ADMIN_KEY}"} \
   --wait \
   --timeout 5m \
   ${DRY_RUN}
+
+echo "===> [4b/5] Wiring v2 ingress controller (GatewayProxy + IngressClass)"
+# The v2 controller ignores ingress-controller.config.apisix.* and instead needs a GatewayProxy
+# that an IngressClass references. Without this, routes never reach APISIX (404 Route Not Found).
+if [[ -z "${DRY_RUN}" ]]; then
+  kubectl apply -f k8s/gateway-proxy.yaml
+  kubectl apply -f k8s/ingressclass.yaml
+fi
 
 echo "===> [5/5] Applying service routes"
 if [[ -z "${DRY_RUN}" ]]; then
