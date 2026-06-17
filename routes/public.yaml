@@ -48,6 +48,35 @@ spec:
         rejected_code: 429
         key_type: var
         key: remote_addr
+
+  # Zitadel login v2 — served by the separate sfg-zitadel-login service (port 3000), NOT :8080.
+  # Higher priority so /ui/v2/login/* wins over the zitadel-auth /* catch-all above.
+  - name: zitadel-login-v2
+    priority: 10
+    match:
+      hosts:
+      - sfg-labs.faithandgamble.in
+      paths:
+      - /ui/v2/login
+      - /ui/v2/login/*
+    backends:
+    - serviceName: sfg-zitadel-login
+      servicePort: 3000
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 200
+        burst: 200
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
 ---
 # --- sfg-apps backends (NMA / Baithak / CMS) ---
 apiVersion: apisix.apache.org/v2
