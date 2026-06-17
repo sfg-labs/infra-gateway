@@ -59,6 +59,13 @@ apisix:
 service:
   type: LoadBalancer
   externalTrafficPolicy: Cluster
+  annotations:
+    # DOKS LoadBalancers drop hairpin traffic (a pod connecting to its own LB's external IP).
+    # In-cluster components (zitadel-login -> Zitadel API, APISIX -> OIDC discovery) call the
+    # public host, which resolves to this LB — without this they fail ("Could not create session",
+    # fetch() returned undefined). This annotation makes the CCM publish the hostname so in-cluster
+    # clients resolve via DNS and the loopback works. Host must resolve to the LB (GoDaddy A record).
+    service.beta.kubernetes.io/do-loadbalancer-hostname: sfg-labs.faithandgamble.in
   http:
     enabled: true
     servicePort: 80
