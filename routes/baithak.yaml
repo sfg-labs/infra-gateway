@@ -36,7 +36,7 @@ spec:
     - name: openid-connect
       enable: true
       config:
-        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
         bearer_only: true
         realm: baithak
         set_userinfo_header: true
@@ -82,7 +82,7 @@ spec:
     - name: openid-connect
       enable: true
       config:
-        discovery: https://auth.sfg-labs.in/.well-known/openid-configuration
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
         bearer_only: true
         realm: baithak
         token_signing_alg_values_expected: RS256

@@ -25,7 +25,7 @@ spec:
   - name: zitadel-auth
     match:
       hosts:
-      - auth.sfg-labs.in
+      - sfg-labs.faithandgamble.in
       paths:
       - /*
     backends:

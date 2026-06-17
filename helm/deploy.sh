@@ -20,6 +20,18 @@ helm repo update
 echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs)"
 kubectl apply -f k8s/namespaces.yaml
 
+echo "===> [2b/5] Installing cert-manager (for Let's Encrypt TLS)"
+# Installs CRDs + controller + webhook. Idempotent. The ClusterIssuer/Certificate are applied
+# later (step 6) once the webhook is up and APISIX can solve the HTTP-01 challenge.
+CERT_MANAGER_VERSION="v1.20.2"
+if [[ -z "${DRY_RUN}" ]]; then
+  kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
+  echo "    Waiting for cert-manager to be ready..."
+  kubectl -n cert-manager rollout status deploy/cert-manager --timeout=180s
+  kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
+  kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=180s
+fi
+
 echo "===> [3/5] Installing Zitadel"
 # Zitadel must be deployed before APISIX so its service is reachable for OIDC discovery
 if [[ -z "${DRY_RUN}" ]]; then
@@ -69,6 +81,15 @@ echo "===> [5/5] Applying service routes"
 if [[ -z "${DRY_RUN}" ]]; then
   kubectl apply -f routes/
   kubectl -n "${NAMESPACE}" get apisixroutes
+fi
+
+echo "===> [6/6] Applying TLS (cert-manager issuers + Zitadel certificate + ApisixTls)"
+# Applied after routes so the apisix IngressClass + GatewayProxy exist for the HTTP-01 challenge.
+if [[ -z "${DRY_RUN}" ]]; then
+  kubectl apply -f k8s/cert-issuer.yaml
+  kubectl apply -f k8s/zitadel-tls.yaml
+  echo "    Certificate issuance is async; check with:"
+  echo "      kubectl -n ${NAMESPACE} get certificate,order,challenge"
 fi
 
 echo ""

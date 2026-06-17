@@ -8,6 +8,12 @@ apisix:
   enabled: true
   kind: Deployment
 
+  # Enable the TLS listener (:9443) so APISIX can terminate HTTPS. Certs are supplied per-host
+  # via ApisixTls CRDs (k8s/zitadel-tls.yaml), backed by cert-manager Let's Encrypt secrets.
+  ssl:
+    enabled: true
+    containerPort: 9443
+
   podAnnotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: "9091"
@@ -57,6 +63,9 @@ service:
     enabled: true
     servicePort: 80
     containerPort: 9080
+  # HTTPS — DOKS LoadBalancer also exposes :443 → APISIX TLS listener (:9443).
+  tls:
+    servicePort: 443
 
 # etcd — single replica for Y1, set replicaCount: 3 for HA
 etcd:

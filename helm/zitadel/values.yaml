@@ -17,11 +17,11 @@ zitadel:
 
   configmapConfig:
     ExternalSecure: true
-    ExternalDomain: auth.sfg-labs.in    # ← change to your actual auth domain
+    ExternalDomain: sfg-labs.faithandgamble.in   # ← auth/console domain (GoDaddy A record → LB IP)
     ExternalPort: 443
 
     TLS:
-      Enabled: false   # TLS terminated at Cloudflare
+      Enabled: false   # TLS terminated at APISIX (cert-manager cert via ApisixTls)
 
     Database:
       Postgres:

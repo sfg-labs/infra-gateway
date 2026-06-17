@@ -1,0 +1,34 @@
+# TLS for the Zitadel auth/console host.
+#
+# 1. cert-manager Certificate → obtains a Let's Encrypt cert and stores it in the
+#    `zitadel-tls` Secret (type kubernetes.io/tls) in sfg-gateway.
+# 2. ApisixTls → tells APISIX to serve that cert for SNI sfg-labs.faithandgamble.in on :443.
+#
+# The host must match Zitadel's ExternalDomain (helm/zitadel/values.yaml) and the
+# zitadel-auth route host (routes/public.yaml).
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: zitadel-tls
+  namespace: sfg-gateway
+spec:
+  secretName: zitadel-tls
+  dnsNames:
+    - sfg-labs.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: zitadel-tls
+  namespace: sfg-gateway
+spec:
+  ingressClassName: apisix
+  hosts:
+    - sfg-labs.faithandgamble.in
+  secret:
+    name: zitadel-tls
+    namespace: sfg-gateway
