@@ -41,8 +41,10 @@ spec:
     - name: limit-req
       enable: true
       config:
-        rate: 20
-        burst: 10
+        # Zitadel serves a SPA (console) — one page load fetches many JS chunks/assets at once,
+        # so this must be generous or the browser gets 429s and the console shows a white screen.
+        rate: 200
+        burst: 200
         rejected_code: 429
         key_type: var
         key: remote_addr
