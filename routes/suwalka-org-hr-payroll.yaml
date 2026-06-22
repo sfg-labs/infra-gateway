@@ -30,6 +30,7 @@ spec:
     match:
       hosts:
       - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
       paths:
       - /api/hr/*
       methods:
