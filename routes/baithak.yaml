@@ -38,6 +38,8 @@ spec:
       config:
         discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
         bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
         realm: baithak
         set_userinfo_header: true
         userinfo_header_name: X-Userinfo
@@ -84,6 +86,8 @@ spec:
       config:
         discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
         bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
         realm: baithak
         token_signing_alg_values_expected: RS256
         timeout: 3

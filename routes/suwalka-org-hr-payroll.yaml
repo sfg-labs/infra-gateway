@@ -48,6 +48,8 @@ spec:
       config:
         discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
         bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
         realm: suwalka
         set_userinfo_header: true
         userinfo_header_name: X-Userinfo
