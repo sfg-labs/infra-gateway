@@ -1,0 +1,106 @@
+# Public API host for Suwalka services: api.faithandgamble.in (path per service).
+# Shares the existing APISIX gateway LoadBalancer IP (168.144.48.171) — no new IP/LB.
+# TLS is issued by cert-manager and served by APISIX (ApisixTls). The Certificate +
+# ApisixTls below are HOST-level (shared): future services just add their own
+# ApisixRoute on this same host (e.g. /api/hr/*) and reuse this cert.
+#
+# auth is reached at:
+#   PUBLIC (no token):  /auth/login | /auth/refresh | /auth/logout | /auth/docs
+#   PROTECTED (JWT):    /auth/admin/*
+# (login/refresh/logout are POST; /auth/docs is the Swagger UI. /healthz stays
+#  pod-internal for k8s probes — not exposed through the gateway.)
+# auth serves these paths natively, so no path rewrite is needed.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-faithandgamble-tls
+  namespace: sfg-labs
+spec:
+  secretName: api-faithandgamble-tls
+  dnsNames:
+    - api.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: api-faithandgamble
+  namespace: sfg-labs
+spec:
+  ingressClassName: apisix
+  hosts:
+    - api.faithandgamble.in
+  secret:
+    name: api-faithandgamble-tls
+    namespace: sfg-labs
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-auth
+  namespace: sfg-labs
+  labels:
+    sfg-project: suwalka
+    sfg-auth: mixed
+spec:
+  ingressClassName: apisix
+  http:
+    # Public front door — no openid-connect (these are how you GET a token + view docs).
+    - name: suwalka-auth-public
+      match:
+        hosts:
+          - api.faithandgamble.in
+        paths:
+          - /auth/login
+          - /auth/refresh
+          - /auth/logout
+          - /auth/docs
+          - /auth/docs/*
+        methods: [GET, POST, OPTIONS]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+    # Provisioning admin surface — JWT-protected (gateway injects X-Userinfo).
+    - name: suwalka-auth-admin
+      match:
+        hosts:
+          - api.faithandgamble.in
+        paths:
+          - /auth/admin/*
+        methods: [GET, POST, PUT, PATCH, DELETE]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        - name: openid-connect
+          enable: true
+          config:
+            discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+            bearer_only: true
+            realm: suwalka
+            client_id: "bearer-only-unused"
+            client_secret: "bearer-only-unused"
+            set_userinfo_header: true
+            userinfo_header_name: X-Userinfo
+            token_signing_alg_values_expected: RS256
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
