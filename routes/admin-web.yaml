@@ -1,0 +1,95 @@
+# Public frontend host for the Suwalka back-office admin web: suwalka.faithandgamble.in
+# Shares the existing APISIX gateway LoadBalancer IP (168.144.48.171) — no new IP/LB.
+# TLS is issued by cert-manager and served by APISIX (ApisixTls).
+#
+# This is a browser-facing Next.js app, so the route is PUBLIC — the openid-connect
+# plugin is deliberately OMITTED. Auth happens IN the app via calls to the /auth/* APIs
+# on api.faithandgamble.in; the gateway must not gate the HTML/asset requests.
+#
+# NAMESPACE NOTE: this lives in sfg-labs because the APISIX ingress controller
+# (ApisixRoute v2) routes only to Services in the route's OWN namespace — there is no
+# backends[].serviceNamespace. The admin-web Service is in sfg-labs.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: suwalka-faithandgamble-tls
+  namespace: sfg-labs
+spec:
+  secretName: suwalka-faithandgamble-tls
+  dnsNames:
+    - suwalka.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: suwalka-faithandgamble
+  namespace: sfg-labs
+spec:
+  ingressClassName: apisix
+  hosts:
+    - suwalka.faithandgamble.in
+  secret:
+    name: suwalka-faithandgamble-tls
+    namespace: sfg-labs
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: admin-web
+  namespace: sfg-labs
+  labels:
+    sfg-project: suwalka
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — back-office admin web (Next.js frontend)"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "admin-web:3000"
+spec:
+  ingressClassName: apisix
+  http:
+    # Public front door — serves the whole app (pages + static assets). No openid-connect.
+    - name: admin-web
+      match:
+        hosts:
+          - suwalka.faithandgamble.in
+        paths:
+          - /*
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+          - HEAD
+      backends:
+        - serviceName: admin-web
+          servicePort: 3000
+          weight: 100
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            # A single page load fetches many JS/CSS chunks at once — keep this generous
+            # or the browser gets 429s and the app shows a blank screen.
+            rate: 200
+            burst: 200
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
