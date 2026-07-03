@@ -1,0 +1,91 @@
+# Dev host for the Suwalka back-office admin web: suwalka-dev.faithandgamble.in
+# Shares the existing APISIX gateway LoadBalancer IP (168.144.48.171) — no new IP/LB.
+# TLS is issued by cert-manager and served by APISIX (ApisixTls).
+#
+# Routes to the "admin-web-dev" Helm release (see admin-web/helm/admin-web/values-dev.yaml
+# and .github/workflows/cd-dev.yaml), which runs alongside prod's "admin-web" release in
+# the same sfg-labs namespace under a distinct Service name.
+#
+# This is a browser-facing Next.js app, so the route is PUBLIC — the openid-connect
+# plugin is deliberately OMITTED, same as the prod route.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: suwalka-dev-faithandgamble-tls
+  namespace: sfg-labs
+spec:
+  secretName: suwalka-dev-faithandgamble-tls
+  dnsNames:
+    - suwalka-dev.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: suwalka-dev-faithandgamble
+  namespace: sfg-labs
+spec:
+  ingressClassName: apisix
+  hosts:
+    - suwalka-dev.faithandgamble.in
+  secret:
+    name: suwalka-dev-faithandgamble-tls
+    namespace: sfg-labs
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: admin-web-dev
+  namespace: sfg-labs
+  labels:
+    sfg-project: suwalka
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — back-office admin web (dev environment)"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "admin-web-dev:3000"
+spec:
+  ingressClassName: apisix
+  http:
+    - name: admin-web-dev
+      match:
+        hosts:
+          - suwalka-dev.faithandgamble.in
+        paths:
+          - /*
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+          - HEAD
+      backends:
+        - serviceName: admin-web-dev
+          servicePort: 3000
+          weight: 100
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            rate: 200
+            burst: 200
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
