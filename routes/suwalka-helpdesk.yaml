@@ -1,0 +1,66 @@
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-helpdesk
+  namespace: sfg-labs
+  labels:
+    sfg-project: suwalka
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — HRMS helpdesk/cases service"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "suwalka-helpdesk:3010"
+spec:
+  ingressClassName: apisix
+  http:
+  - name: suwalka-helpdesk-api
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      paths:
+      - /api/helpdesk/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: suwalka-helpdesk
+      servicePort: 3010
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka
