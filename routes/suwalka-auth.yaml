@@ -64,6 +64,17 @@ spec:
         - serviceName: suwalka-auth
           servicePort: 3000
       plugins:
+        # Browser clients (admin-web) POST JSON here, which triggers a CORS
+        # preflight OPTIONS the backend itself doesn't handle (tsoa only
+        # generates the POST route) — answer it at the gateway instead.
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+            allow_methods: "POST,OPTIONS"
+            allow_headers: "*"
+            allow_credential: false
+            max_age: 3600
         - name: request-id
           enable: true
           config:
