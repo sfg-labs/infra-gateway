@@ -198,3 +198,28 @@ spec:
     - serviceName: suwalka-org-hr-payroll
       servicePort: 3001
       weight: 100
+
+  # Suwalka HR/Payroll Swagger UI — public read-only API docs, no auth required.
+  # External path is /org/swagger(/*); service actually serves it at /docs, so
+  # proxy-rewrite strips the external prefix before forwarding upstream.
+  - name: suwalka-hr-docs
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /org/swagger
+      - /org/swagger/*
+      methods:
+      - GET
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/org/swagger(.*)"
+        - "/docs$1"
