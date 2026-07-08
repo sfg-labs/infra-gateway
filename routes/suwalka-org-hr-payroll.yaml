@@ -52,6 +52,7 @@ spec:
         client_id: "bearer-only-unused"
         client_secret: "bearer-only-unused"
         realm: suwalka
+        use_jwks: true
         set_userinfo_header: true
         userinfo_header_name: X-Userinfo
         set_id_token_header: false
