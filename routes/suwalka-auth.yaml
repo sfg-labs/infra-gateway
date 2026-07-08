@@ -107,7 +107,6 @@ spec:
             realm: suwalka
             client_id: "bearer-only-unused"
             client_secret: "bearer-only-unused"
-            use_jwks: true
             set_userinfo_header: true
             userinfo_header_name: X-Userinfo
             token_signing_alg_values_expected: RS256
