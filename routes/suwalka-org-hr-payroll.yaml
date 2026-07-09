@@ -39,11 +39,28 @@ spec:
       - PUT
       - PATCH
       - DELETE
+      - OPTIONS
     backends:
     - serviceName: suwalka-org-hr-payroll
       servicePort: 3001
       weight: 100
     plugins:
+    # Browser clients (admin-web) call this JWT-protected route directly, which
+    # triggers a CORS preflight OPTIONS with no Authorization header. The cors
+    # plugin runs at a higher APISIX priority than openid-connect, so it answers
+    # the preflight itself (never reaching the auth check) and still stamps
+    # Access-Control-Allow-Origin on the real response once a bearer token gets
+    # through. First protected route in this repo with `cors` — the pattern
+    # mirrors routes/suwalka-auth.yaml's public rule; use it as the template for
+    # any other protected route a browser calls directly.
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
     - name: openid-connect
       enable: true
       config:
