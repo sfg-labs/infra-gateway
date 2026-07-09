@@ -33,6 +33,7 @@ spec:
       - api.faithandgamble.in
       paths:
       - /api/hr/*
+      - /api/recruitment/*
       methods:
       - GET
       - POST
