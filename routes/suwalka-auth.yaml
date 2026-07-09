@@ -70,7 +70,10 @@ spec:
         - name: cors
           enable: true
           config:
-            allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+            # suwalka-dev has no TLS yet (served over plain http), so both schemes are
+            # listed — the browser's Origin header must match exactly or the preflight
+            # is silently dropped (no ACAO header back, request blocked client-side).
+            allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
             allow_methods: "POST,OPTIONS"
             allow_headers: "*"
             allow_credential: false
