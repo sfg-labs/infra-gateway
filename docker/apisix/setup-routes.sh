@@ -131,6 +131,11 @@ create_health_route "51" "cms-health"    "api.cms.localhost"     "3"
 # Upstream 5 → mock-backend:80 (the actual service is not in the Docker compose stack;
 # mock-backend stands in for local smoke testing, same pattern as other services above).
 create_route "60" "suwalka-hr-api" "api.suwalka.localhost" "/api/hr/" "5" "true"
+# Recruitment + the folded HRMS modules (perf/docs/helpdesk) — all served by org-hr:3001.
+create_route "62" "suwalka-recruitment-api" "api.suwalka.localhost" "/api/recruitment/" "5" "true"
+create_route "63" "suwalka-perf-api"        "api.suwalka.localhost" "/api/perf/"        "5" "true"
+create_route "64" "suwalka-docs-api"        "api.suwalka.localhost" "/api/docs/"        "5" "true"
+create_route "65" "suwalka-helpdesk-api"    "api.suwalka.localhost" "/api/helpdesk/"    "5" "true"
 create_health_route "61" "suwalka-hr-health" "api.suwalka.localhost" "5"
 
 echo ""
