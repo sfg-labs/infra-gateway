@@ -60,7 +60,7 @@ spec:
     - name: cors
       enable: true
       config:
-        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
+        allow_origins: "http://localhost:3000,http://localhost:3010,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
         allow_headers: "*"
         allow_credential: false
