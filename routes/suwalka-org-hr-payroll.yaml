@@ -37,6 +37,7 @@ spec:
       - /api/perf/*
       - /api/docs/*
       - /api/helpdesk/*
+      - /api/training/*
       methods:
       - GET
       - POST

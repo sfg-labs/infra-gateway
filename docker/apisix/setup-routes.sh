@@ -136,6 +136,7 @@ create_route "62" "suwalka-recruitment-api" "api.suwalka.localhost" "/api/recrui
 create_route "63" "suwalka-perf-api"        "api.suwalka.localhost" "/api/perf/"        "5" "true"
 create_route "64" "suwalka-docs-api"        "api.suwalka.localhost" "/api/docs/"        "5" "true"
 create_route "65" "suwalka-helpdesk-api"    "api.suwalka.localhost" "/api/helpdesk/"    "5" "true"
+create_route "66" "suwalka-training-api"    "api.suwalka.localhost" "/api/training/"    "5" "true"
 create_health_route "61" "suwalka-hr-health" "api.suwalka.localhost" "5"
 
 echo ""
