@@ -3,6 +3,18 @@
 # namespace — backends[].serviceNamespace is not supported. All Suwalka routes therefore live
 # in sfg-labs, alongside the suwalka-* Service objects (see routes/suwalka-org-hr-payroll.yaml).
 #
+# PATH PREFIX — this service is also reachable under /ai-service/* (an alias of the
+# bare /v1/* routes below, same backend, via proxy-rewrite stripping the prefix).
+# Added because a bare, unprefixed /docs (FastAPI's default Swagger UI path) collided
+# with other services on this shared host — generic paths like /docs, /redoc,
+# /openapi.json aren't namespaced per-service. /ai-service/docs is now the reachable
+# Swagger UI; the API container runs with --root-path /ai-service (helm chart
+# deployment.yaml) so the docs page's runtime openapi.json fetch and the spec's
+# `servers` entry (which Swagger UI's "Try it out" uses) both resolve under this
+# prefix instead of the bare root. The bare /v1/* routes stay live and unchanged for
+# existing peer-service/tenant-API-key callers — this prefix is additive, not a
+# replacement.
+#
 # AUTH NUANCE — this service accepts THREE caller shapes on the same /v1/* paths
 # (see suwalka-ai-services/docs/deployment.md §5 for the full write-up):
 #   1. Human/browser JWTs minted by suwalka-auth — validated by openid-connect
@@ -49,8 +61,15 @@ spec:
       - PATCH
       - DELETE
       # Presence check: any non-empty X-Internal-Token header (peer services only).
-      vars:
-      - ["http_x_internal_token", "~~", ".+"]
+      # This CRD version has no `vars` field (older APISIX-native triple-array
+      # syntax) — the installed apisix-ingress-controller uses the structured
+      # `exprs` format instead.
+      exprs:
+      - subject:
+          scope: Header
+          name: X-Internal-Token
+        op: RegexMatch
+        value: ".+"
     backends:
     - serviceName: suwalka-ai-services
       servicePort: 3012
@@ -90,10 +109,14 @@ spec:
       - PUT
       - PATCH
       - DELETE
-      # Tenant API keys are NOT JWTs — openid-connect would reject them. `~~` is
-      # APISIX's PCRE match operator for `vars`.
-      vars:
-      - ["http_authorization", "~~", "^Bearer sk-suwalka-"]
+      # Tenant API keys are NOT JWTs — openid-connect would reject them. This CRD
+      # version has no `vars` field; use the structured `exprs` format instead.
+      exprs:
+      - subject:
+          scope: Header
+          name: Authorization
+        op: RegexMatch
+        value: "^Bearer sk-suwalka-"
     backends:
     - serviceName: suwalka-ai-services
       servicePort: 3012
@@ -211,15 +234,17 @@ spec:
 
   # FastAPI's default Swagger/OpenAPI surface (no docs_url/openapi_url override in
   # suwalka_ai/api/app.py) — public, same as health, so operators/integrators can
-  # reach it through the gateway rather than only via a port-forward.
+  # reach it through the gateway rather than only via a port-forward. Served under
+  # /ai-service/* (see the PATH PREFIX note above) rather than bare /docs, which
+  # collided with other services on this shared host.
   - name: suwalka-ai-services-docs
     match:
       hosts:
       - api.faithandgamble.in
       paths:
-      - /docs
-      - /redoc
-      - /openapi.json
+      - /ai-service/docs
+      - /ai-service/redoc
+      - /ai-service/openapi.json
       methods:
       - GET
     backends:
@@ -227,8 +252,191 @@ spec:
       servicePort: 3012
       weight: 100
     plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
     - name: request-id
       enable: true
       config:
         header_name: X-Request-Id
         include_in_response: true
+
+  # /ai-service/v1/* — alias of the bare /v1/* M2M-internal-token route above, same
+  # backend, prefix stripped by proxy-rewrite. Exists so Swagger UI's "Try it out"
+  # (which calls the openapi spec's `servers`-prefixed URL) has somewhere to land;
+  # the bare /v1/* routes remain the primary path for existing callers.
+  - name: suwalka-ai-services-prefixed-m2m-internal-token
+    priority: 10
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /ai-service/v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      exprs:
+      - subject:
+          scope: Header
+          name: X-Internal-Token
+        op: RegexMatch
+        value: ".+"
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+
+  # /ai-service/v1/* — alias of the bare /v1/* M2M-api-key route above.
+  - name: suwalka-ai-services-prefixed-m2m-api-key
+    priority: 10
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /ai-service/v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      exprs:
+      - subject:
+          scope: Header
+          name: Authorization
+        op: RegexMatch
+        value: "^Bearer sk-suwalka-"
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+
+  # /ai-service/v1/* — alias of the bare /v1/* JWT route above (default priority,
+  # falls through only when neither M2M marker above matched).
+  - name: suwalka-ai-services-prefixed-api-jwt
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /ai-service/v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
