@@ -98,6 +98,28 @@ create_health_route() {
     }" > /dev/null
 }
 
+create_docs_redirect_route() {
+  local id="$1" name="$2" host="$3" upstream_id="$4"
+  echo "--> Route: ${name} (${host}/org/swagger → /org/swagger/) [301, no auth]"
+  # Mirrors the suwalka-hr-docs-redirect rule in routes/public.yaml. The `redirect` plugin
+  # short-circuits before the upstream, so upstream_id is never contacted (the schema wants
+  # one). This is fully testable locally despite mock-backend having no /docs: the redirect
+  # never proxies, so the 301 + Location here is the real production behaviour.
+  curl -sf -X PUT "${ADMIN_URL}/apisix/admin/routes/${id}" \
+    -H "X-API-KEY: ${ADMIN_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"name\": \"${name}\",
+      \"host\": \"${host}\",
+      \"uri\": \"/org/swagger\",
+      \"methods\": [\"GET\"],
+      \"upstream_id\": \"${upstream_id}\",
+      \"plugins\": {
+        \"redirect\": {\"uri\": \"/org/swagger/\", \"ret_code\": 301}
+      }
+    }" > /dev/null
+}
+
 wait_for_apisix
 
 echo ""
@@ -139,6 +161,11 @@ create_route "65" "suwalka-helpdesk-api"    "api.suwalka.localhost" "/api/helpde
 create_route "66" "suwalka-training-api"    "api.suwalka.localhost" "/api/training/"    "5" "true"
 create_health_route "61" "suwalka-hr-health" "api.suwalka.localhost" "5"
 
+# Public: bare /org/swagger → 301 → /org/swagger/. Mirrors routes/public.yaml. The
+# trailing-slash form (/org/swagger/*, proxied to /docs) is NOT mirrored — mock-backend
+# does not serve a Swagger UI, so there is nothing local for it to return.
+create_docs_redirect_route "67" "suwalka-hr-docs-redirect" "api.suwalka.localhost" "5"
+
 echo ""
 echo "========================================================"
 echo "  Routes configured. Test with:"
@@ -150,6 +177,9 @@ echo ""
 echo "  # Protected without token (expect 401):"
 echo "  curl -H 'Host: api.nma.localhost' http://localhost:9080/api/audit"
 echo "  curl -H 'Host: api.suwalka.localhost' http://localhost:9080/api/hr/employees"
+echo ""
+echo "  # Bare Swagger path (expect 301 + Location: /org/swagger/):"
+echo "  curl -i -H 'Host: api.suwalka.localhost' http://localhost:9080/org/swagger"
 echo ""
 echo "  # Zitadel OIDC discovery:"
 echo "  curl http://localhost:8080/.well-known/openid-configuration | jq .issuer"
