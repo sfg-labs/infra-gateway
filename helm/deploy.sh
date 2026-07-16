@@ -79,7 +79,20 @@ fi
 
 echo "===> [5/5] Applying service routes"
 if [[ -z "${DRY_RUN}" ]]; then
-  kubectl apply -f routes/
+  # routes/suwalka-ai-services.yaml embeds ${SUWALKA_AI_GATEWAY_SECRET} (X-Gateway-Secret
+  # injection, proving requests came from APISIX). Substitute ONLY that var so proxy-rewrite
+  # regex refs like $1 survive; every other route applies verbatim.
+  if [[ -z "${SUWALKA_AI_GATEWAY_SECRET:-}" ]]; then
+    echo "  WARNING: SUWALKA_AI_GATEWAY_SECRET is unset — suwalka-ai-services will 401 every" >&2
+    echo "           browser JWT (X-Gateway-Secret would be blank). Set it before deploying." >&2
+  fi
+  for route in routes/*.yaml; do
+    if [[ "${route}" == *"suwalka-ai-services.yaml" ]]; then
+      envsubst '${SUWALKA_AI_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
+    else
+      kubectl apply -f "${route}"
+    fi
+  done
   kubectl -n "${NAMESPACE}" get apisixroutes
 fi
 

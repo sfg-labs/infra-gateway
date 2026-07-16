@@ -163,6 +163,19 @@ spec:
       servicePort: 3012
       weight: 100
     plugins:
+    # After openid-connect validates the JWT and sets X-Userinfo, inject X-Gateway-Secret
+    # so the service's _from_gateway trusts that X-Userinfo (it is the proof the request
+    # came from APISIX, not a client that reached the ClusterIP off-gateway with a forged
+    # X-Userinfo). Value is substituted at deploy time by envsubst in helm/deploy.sh from
+    # the SUWALKA_AI_GATEWAY_SECRET GitHub Secret — the literal secret is never committed.
+    # MUST be applied via helm/deploy.sh (envsubst); a bare `kubectl apply` of this file
+    # ships the placeholder verbatim and the service will 401 every browser JWT.
+    - name: proxy-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway-Secret: ${SUWALKA_AI_GATEWAY_SECRET}
     # Browser clients (admin-web) may call this route directly, which triggers a
     # CORS preflight OPTIONS with no Authorization header. cors runs at a higher
     # APISIX priority than openid-connect and answers the preflight itself — same
@@ -397,6 +410,12 @@ spec:
         regex_uri:
         - "^/ai-service(.*)"
         - "$1"
+        # Same X-Gateway-Secret injection as the bare /v1/* JWT route (see note above).
+        # envsubst substitutes ONLY ${SUWALKA_AI_GATEWAY_SECRET}, leaving the $1 regex ref
+        # intact (deploy.sh passes an explicit var list to envsubst).
+        headers:
+          set:
+            X-Gateway-Secret: ${SUWALKA_AI_GATEWAY_SECRET}
     - name: cors
       enable: true
       config:

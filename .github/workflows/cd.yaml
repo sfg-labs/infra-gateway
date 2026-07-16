@@ -99,7 +99,14 @@ jobs:
           echo "Waiting for Postgres to become ready..."
           kubectl -n sfg-gateway rollout status statefulset/zitadel-db-postgresql --timeout=180s
 
+      - name: Install envsubst (gettext-base)
+        run: sudo apt-get update && sudo apt-get install -y gettext-base
+
       - name: Deploy gateway (Zitadel + APISIX + routes)
+        env:
+          # Substituted into routes/suwalka-ai-services.yaml's X-Gateway-Secret injection
+          # by envsubst in helm/deploy.sh — keeps the secret out of git.
+          SUWALKA_AI_GATEWAY_SECRET: ${{ secrets.SUWALKA_AI_GATEWAY_SECRET }}
         run: bash helm/deploy.sh
 
       - name: Report deployment state
