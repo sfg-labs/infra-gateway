@@ -26,7 +26,15 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to DOKS
-    runs-on: ubuntu-latest
+    # Self-hosted, matching CI and every other sfg-labs repo. GitHub-hosted minutes
+    # are not dependable across this org (see showroom-ai-reel, billing-blocked), and a
+    # deploy that cannot start is worse than one that runs on our own box.
+    #
+    # SECURITY: unlike an ephemeral ubuntu-latest VM, a self-hosted runner's workspace
+    # PERSISTS between jobs on a box shared by ~6 runners across the estate. The
+    # kubeconfig written below is full cluster-admin, so it MUST be removed on every
+    # exit path — see the "Scrub the kubeconfig" step at the end of this job.
+    runs-on: [self-hosted, linux, x64]
     env:
       KUBECONFIG: ${{ github.workspace }}/.kubeconfig
     steps:
@@ -100,7 +108,16 @@ jobs:
           kubectl -n sfg-gateway rollout status statefulset/zitadel-db-postgresql --timeout=180s
 
       - name: Install envsubst (gettext-base)
-        run: sudo apt-get update && sudo apt-get install -y gettext-base
+        # Self-hosted runners are long-lived, so envsubst is usually already present
+        # and re-running apt-get every deploy is both slow and needlessly privileged.
+        # Only install when genuinely missing; fail loudly if we cannot get it.
+        run: |
+          if command -v envsubst >/dev/null 2>&1; then
+            echo "envsubst present: $(command -v envsubst)"
+          else
+            echo "envsubst missing — installing gettext-base"
+            sudo apt-get update && sudo apt-get install -y gettext-base
+          fi
 
       - name: Deploy gateway (Zitadel + APISIX + routes)
         env:
@@ -118,3 +135,18 @@ jobs:
           kubectl -n sfg-gateway get apisixroutes || true
           echo "===> Pods"
           kubectl -n sfg-gateway get pods -o wide || true
+
+      # MUST be the last step, and MUST run on every exit path.
+      # On a self-hosted runner the workspace survives the job, on a box shared by
+      # ~6 runners across the estate. Leaving a full cluster-admin kubeconfig on disk
+      # would let any later job on this runner — from any repo in the group — take the
+      # cluster. This step is the entire reason the self-hosted switch is safe.
+      - name: Scrub the kubeconfig
+        if: always()
+        run: |
+          rm -f "$KUBECONFIG" || true
+          if [[ -e "$KUBECONFIG" ]]; then
+            echo "::error::Failed to remove $KUBECONFIG from a persistent runner workspace."
+            exit 1
+          fi
+          echo "kubeconfig scrubbed from the runner workspace."
