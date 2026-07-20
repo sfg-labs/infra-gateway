@@ -38,6 +38,11 @@ spec:
       - /api/docs/*
       - /api/helpdesk/*
       - /api/training/*
+      # Unprefixed careers/recruitment surface. This path is LIVE and was
+      # missing from this file — applying the file without it would have
+      # deleted it from the route. Kept last to match the deployed path order
+      # so `kubectl diff` stays clean.
+      - /recruitment/*
       methods:
       - GET
       - POST
@@ -58,13 +63,44 @@ spec:
     # through. First protected route in this repo with `cors` — the pattern
     # mirrors routes/suwalka-auth.yaml's public rule; use it as the template for
     # any other protected route a browser calls directly.
+    #
+    # ----------------------------------------------------------------------
+    # CORS HERE REFLECTS DEPLOYED REALITY — DO NOT "FIX" IT IN PASSING.
+    #
+    # `allow_origins: '**'` together with `allow_credential: true` is the
+    # classic unsafe CORS combination and will look like a bug. It is recorded
+    # here because it is what is actually running on the cluster (verified
+    # against the live ApisixRoute, 2026-07-20).
+    #
+    # An earlier revision of this file carried stricter values (an explicit
+    # localhost-based origin list, `allow_credential: false`, `allow_headers:
+    # "*"`). Those were NEVER applied — history shows the narrow list has
+    # always been in git and '**' never was, so the cluster was widened
+    # out-of-band, almost certainly because the narrow list broke a real
+    # caller. The file has been reconciled DOWN to the live values so that a CD
+    # run is a no-op rather than an unreviewed security + availability change
+    # applied by a deploy script at a time nobody is watching.
+    #
+    # Tightening this is a deliberate follow-up with its own testing, not a
+    # drive-by edit. Before narrowing `allow_origins`, the origin list must be
+    # verified against every real caller (admin-web prod and dev, local dev
+    # hosts, mobile/webview clients, anything else that presents an Origin
+    # header) — an origin missing from that list fails preflight silently, with
+    # no ACAO header and a client-side block that is not visible in gateway
+    # logs. Note also that `allow_headers` is an explicit list live, not "*":
+    # narrowing origins while a caller sends Idempotency-Key or X-Org-Id would
+    # fail in the same silent way.
+    #
+    # Same drift, same note, in routes/suwalka-auth.yaml and
+    # routes/suwalka-notification.yaml.
+    # ----------------------------------------------------------------------
     - name: cors
       enable: true
       config:
-        allow_origins: "http://localhost:3000,http://localhost:3010,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
+        allow_origins: "**"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-        allow_headers: "*"
-        allow_credential: false
+        allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+        allow_credential: true
         max_age: 3600
     - name: openid-connect
       enable: true

@@ -26,26 +26,35 @@ spec:
       - PUT
       - PATCH
       - DELETE
-      - OPTIONS
     backends:
     - serviceName: suwalka-notification
       servicePort: 3007
       weight: 100
     plugins:
-    # admin-web's NotificationBell (navbar) polls GET /api/notify/me directly from
-    # the browser, which triggers a CORS preflight OPTIONS with no Authorization
-    # header. The cors plugin runs at higher APISIX priority than openid-connect,
-    # so it answers the preflight itself (never reaching the auth check) and stamps
-    # Access-Control-Allow-Origin on the real response once a bearer token gets
-    # through. Same template as routes/suwalka-org-hr-payroll.yaml.
-    - name: cors
-      enable: true
-      config:
-        allow_origins: "http://localhost:3000,http://localhost:3010,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
-        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-        allow_headers: "*"
-        allow_credential: false
-        max_age: 3600
+    # ----------------------------------------------------------------------
+    # NO cors PLUGIN ON THIS RULE — that matches the deployed object, and it
+    # is deliberate, not an omission. Do not "restore" it.
+    #
+    # An earlier revision of this file carried a cors plugin here, justified
+    # by admin-web's NotificationBell polling GET /api/notify/me from the
+    # browser. That is no longer how the browser reaches the inbox, and the
+    # plugin was never applied to the cluster.
+    #
+    # This rule is bound to api.suwalka-pos.sfg-labs.in ONLY, which is the
+    # internal/service-to-service hostname — no browser calls it, so there is
+    # no preflight to answer. The browser-facing path is the
+    # suwalka-notification-inbox rule below, which is bound to
+    # api.faithandgamble.in, does carry cors, and rewrites /notify/* onto this
+    # same backend's /api/notify/*. Verified against the live gateway
+    # (2026-07-20):
+    #
+    #   GET https://api.faithandgamble.in/notify/me      -> 401 (inbox rule, JWT enforced)
+    #   GET https://api.faithandgamble.in/api/notify/me  -> 404 (no route; this rule's host doesn't match)
+    #
+    # OPTIONS is likewise absent from the method list above to match live: with
+    # no cors plugin there is nothing to answer a preflight, so advertising the
+    # method would only route preflights into openid-connect and 401 them.
+    # ----------------------------------------------------------------------
     - name: openid-connect
       enable: true
       config:
@@ -80,3 +89,95 @@ spec:
           set:
             X-Gateway: sfg-labs
             X-Project: suwalka
+  # ------------------------------------------------------------------------
+  # Browser-facing in-app inbox surface.
+  #
+  # THIS RULE IS LIVE AND SERVING TRAFFIC. It was missing from this file
+  # entirely — it exists on the cluster but had never been committed. Because
+  # helm/deploy.sh applies routes/*.yaml wholesale, the next CD run would have
+  # applied a single-rule version of this object and DELETED /notify/* outright,
+  # taking down every admin-web NotificationBell poll (401 -> 404). It is
+  # recorded here so that a CD run is a no-op.
+  #
+  # Why the rewrite exists: admin-web builds its URLs from
+  # NEXT_PUBLIC_API_BASE_URL and calls the inbox as /notify/*, but the backend
+  # serves it under /api/notify/*. proxy-rewrite bridges the two rather than
+  # forcing a frontend redeploy. Note this rule is bound to BOTH hostnames,
+  # unlike the api rule above.
+  #
+  # Plugin order (proxy-rewrite, cors, openid-connect, request-id) matches the
+  # deployed object exactly. APISIX executes plugins by priority, not by array
+  # position, so the order is cosmetic to the gateway — but it is load-bearing
+  # for drift detection: if it differs, every future `kubectl diff` shows
+  # reordering noise and real drift hides in it. Keep it.
+  #
+  # This rule intentionally has NO limit-req and NO response-rewrite, matching
+  # live. Worth revisiting — an unthrottled polled endpoint is a fair candidate
+  # for a rate limit — but that is a deliberate change with its own review, not
+  # something to fold into a reconciliation commit.
+  # ------------------------------------------------------------------------
+  - name: suwalka-notification-inbox
+    match:
+      hosts:
+      - api.faithandgamble.in
+      - api.suwalka-pos.sfg-labs.in
+      paths:
+      - /notify/*
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-notification
+      servicePort: 3007
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - ^/notify/(.*)
+        - /api/notify/$1
+    # CORS HERE REFLECTS DEPLOYED REALITY — DO NOT "FIX" IT IN PASSING.
+    #
+    # `allow_origins: '**'` together with `allow_credential: true` is the
+    # classic unsafe CORS combination and will look like a bug. It is recorded
+    # here because it is what is actually running (verified against the live
+    # ApisixRoute, 2026-07-20). The narrower localhost-based origin list that
+    # appears elsewhere in this repo was NEVER applied to this rule.
+    #
+    # Tightening this is a deliberate follow-up with its own testing, not a
+    # drive-by edit. Before narrowing `allow_origins`, the list must be verified
+    # against every real caller (admin-web prod and dev, local dev hosts,
+    # mobile/webview clients, anything else presenting an Origin header) — an
+    # origin missing from that list fails preflight silently, with no ACAO
+    # header and a client-side block that is not visible in gateway logs.
+    # See routes/suwalka-auth.yaml for the same note on the same drift.
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "**"
+        allow_methods: "GET,POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,Accept,X-Request-Id"
+        allow_credential: true
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
