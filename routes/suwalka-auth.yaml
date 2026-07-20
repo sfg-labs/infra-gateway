@@ -6,10 +6,53 @@
 #
 # auth is reached at:
 #   PUBLIC (no token):  /auth/login | /auth/refresh | /auth/logout | /auth/docs
+#   PUBLIC (no token):  /auth/password/change   (own rule — tighter rate limit)
 #   PROTECTED (JWT):    /auth/admin/*
 # (login/refresh/logout are POST; /auth/docs is the Swagger UI. /healthz stays
 #  pod-internal for k8s probes — not exposed through the gateway.)
 # auth serves these paths natively, so no path rewrite is needed.
+#
+# ---------------------------------------------------------------------------
+# RATE LIMITING — READ THIS BEFORE CHANGING ANY `rate`/`burst` BELOW.
+#
+# The `key: remote_addr` used here (and in all 16 other route files) does NOT
+# reliably identify the client on this cluster. Verified 2026-07-20 against the
+# live gateway:
+#
+#   * service sfg-apisix-gateway has externalTrafficPolicy: Cluster
+#   * the DO LB is do-loadbalancer-type: REGIONAL_NETWORK — an L4/TCP
+#     passthrough LB. It adds no X-Forwarded-For, and PROXY protocol is not
+#     enabled. api.faithandgamble.in is NOT proxied by Cloudflare, so there is
+#     no CF-Connecting-IP either.
+#   * there is exactly 1 APISIX replica, on node pool-9t8ale6vb-3c8xw1
+#     (10.104.0.2), in a 3-node cluster.
+#
+# With etp=Cluster, a connection landing on either of the two nodes that do NOT
+# host the APISIX pod is SNAT'd by kube-proxy, so remote_addr becomes the node
+# IP. Sampled access logs confirm it: real POST /auth/login traffic arrives as
+# 10.104.0.3 / 10.104.0.4 (the two non-hosting nodes) roughly two times out of
+# three, and only keeps the true client IP on the remaining ~1/3.
+#
+# CONSEQUENCE: for most traffic these limits are NOT per-client. They collapse
+# into two shared buckets and behave as a near-global cap. A *tight* per-IP
+# limit here would therefore not throttle an attacker per-identity — it would
+# let one attacker exhaust the shared bucket and 429 every legitimate user,
+# turning this control into a platform-wide login outage.
+#
+# The numbers below are therefore deliberately sized as a coarse VOLUMETRIC
+# BACKSTOP against floods, with wide headroom over real peak load. They are
+# explicitly NOT an anti-brute-force / anti-enumeration control. Per-account
+# lockout and credential-stuffing defence must live in suwalka-auth / Zitadel,
+# which can key on the actual account. Do not tighten these numbers expecting
+# brute-force protection until source-IP preservation is fixed (etp=Local with
+# APISIX scaled to >=3 replicas or run as a DaemonSet, or PROXY protocol
+# enabled on the DO LB and in APISIX). See the PR opening this file for detail.
+#
+# Note also: limit-req state is per-APISIX-node. There is 1 replica today, so
+# the configured rate is the real rate. If APISIX is ever scaled out, the
+# effective platform-wide limit is multiplied by the replica count and these
+# numbers must be divided accordingly.
+# ---------------------------------------------------------------------------
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -83,6 +126,108 @@ spec:
           config:
             header_name: X-Request-Id
             include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            # Ceiling = rate + burst = 60 req/s (excess within burst is delayed,
+            # beyond it is rejected with 429).
+            #
+            # Sizing: this rule also carries /auth/refresh, which every active
+            # session hits on its own schedule, and /auth/docs. Peak legitimate
+            # load is a shift-change login storm — ~532 provisioned employees,
+            # worst case a whole outlet (~100 staff) logging in inside a minute,
+            # each costing a CORS preflight OPTIONS plus the POST: roughly
+            # 3-6 req/s, plus refresh traffic well under 1 req/s.
+            #
+            # 60 req/s is ~10x that peak. The headroom is intentional: because
+            # remote_addr collapses to a node IP for ~2/3 of traffic (see the
+            # header comment), this bucket is shared platform-wide, so anything
+            # near real peak load would 429 innocent staff. Tighter than the
+            # 60/30 general-API precedent (ceiling 90) used by the other
+            # services, but not "tight" — tight is unsafe until source-IP
+            # preservation is fixed.
+            #
+            # Deviation from the tier table in docs/adding-a-service.md: this
+            # is a credential surface, so it sits below "Standard API" (100/50)
+            # rather than on it; burst is raised over "Low-volume" (30/15) to
+            # absorb shift-change login spikes without 429ing staff.
+            rate: 30
+            burst: 30
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+    # Forced password change on first login — PUBLIC by construction.
+    #
+    # Employees are provisioned with a one-time password handed over in person
+    # by HR; Zitadel forces a change at first login and this is where the
+    # permanent password is set. It verifies a credential WITHOUT a session, so
+    # it is inherently an oracle for both user-existence and password guessing,
+    # and it is the most abuse-prone route on the platform.
+    #
+    # It gets its own http rule purely so it can carry a tighter limit-req than
+    # /auth/login — APISIX plugins apply per-rule, so sharing the public rule
+    # above would force both onto one limit.
+    - name: suwalka-auth-password-change
+      match:
+        hosts:
+          - api.faithandgamble.in
+        paths:
+          - /auth/password/change
+        methods: [POST, OPTIONS]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        # admin-web POSTs JSON here from the browser, so the same preflight
+        # problem as the public rule applies — the backend only serves POST.
+        # Without this the preflight fails and the endpoint is unreachable from
+        # the UI, which is the exact dead-end this route is meant to remove.
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "http://localhost:3000,http://localhost:3010,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
+            allow_methods: "POST,OPTIONS"
+            allow_headers: "*"
+            allow_credential: false
+            max_age: 3600
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            # Ceiling = rate + burst = 15 req/s. Much tighter than /auth/login
+            # because legitimate demand is near zero: an employee changes their
+            # initial password exactly once, ever. Even an HR-led onboarding
+            # session putting 50 new joiners through it inside ten minutes is
+            # under 0.1 req/s, so 15 req/s leaves two orders of magnitude of
+            # headroom and will not lock out an onboarding batch even though
+            # the bucket is effectively shared.
+            #
+            # This caps a password-guessing flood but does NOT make the route
+            # safe on its own — 15 req/s is still ~1.3M attempts/day, and the
+            # shared-bucket problem means the gateway cannot distinguish the
+            # attacker from everyone else. Per-account lockout and throttling
+            # in suwalka-auth / Zitadel is the control that actually stops
+            # enumeration here; this is only a volumetric backstop.
+            #
+            # Deviation from the tier table in docs/adding-a-service.md: below
+            # every tier there, including "Webhooks (public)" (20/10), because
+            # legitimate demand is a once-per-employee-lifetime action.
+            rate: 5
+            burst: 10
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
         - name: response-rewrite
           enable: true
           config:
@@ -119,3 +264,34 @@ spec:
           config:
             header_name: X-Request-Id
             include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            # Ceiling = rate + burst = 200 req/s — deliberately generous, and
+            # looser than the public rule above. Reasoning:
+            #
+            #   * This surface is bearer-only JWT-gated, so an unauthenticated
+            #     attacker cannot reach it at all. The threat a tight limit
+            #     would address is largely already handled by openid-connect.
+            #   * The legitimate caller is org-hr-payroll doing machine-to-
+            #     machine provisioning, including bulk imports (the last one
+            #     covered 532 employees). Those calls originate from a single
+            #     pod, so they all share ONE limit-req key — a tight limit here
+            #     would 429 a bulk import halfway through and leave employees
+            #     half-provisioned, which is a worse failure than the flood it
+            #     would be preventing.
+            #
+            # So this exists only as a backstop against a runaway retry loop,
+            # sized well above any plausible bulk provisioning burst rather
+            # than as a security control.
+            #
+            # Deviation from the tier table in docs/adding-a-service.md: that
+            # table puts "admin, config" at 30/15, which this deliberately
+            # exceeds. A 45 req/s ceiling risks 429ing a parallelised bulk
+            # provisioning run and leaving employees half-provisioned — a worse
+            # outcome than the flood it would prevent on a JWT-gated M2M route.
+            rate: 100
+            burst: 100
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
