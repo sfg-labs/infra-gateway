@@ -91,7 +91,7 @@ bash k3s/install-worker.sh <MASTER_IP> <NODE_TOKEN>
 ```
 
 - **CI** (`.github/workflows/ci.yml`, **self-hosted runners**) runs four jobs on push/PR to `main`: `lint`, `validate-routes`, `helm-template`, and `integration` (spins up the full `docker compose` stack, runs `setup-routes.sh`, then `smoke-test-local.sh`). Match these locally before pushing.
-- **CD** (`.github/workflows/cd.yaml`, GitHub-hosted `ubuntu-latest`) is **manual-trigger only** (`workflow_dispatch`, requires the `confirm` input = `deploy`) — a gateway should not redeploy on every push. It deploys to DOKS and is idempotent (re-running upgrades in place). Required GitHub Secrets: `DOKS_KUBECONFIG`, `ZITADEL_DB_PASSWORD`, `ZITADEL_MASTERKEY` (**exactly 32 chars**), `APISIX_ADMIN_KEY`. Full detail in `docs/doks-deployment.md`.
+- **CD** (`.github/workflows/cd.yaml`, **self-hosted runners** — switched from GitHub-hosted `ubuntu-latest` on 2026-07-20, since GitHub-hosted minutes are not dependable across this org) is **manual-trigger only** (`workflow_dispatch`, requires the `confirm` input = `deploy`) — a gateway should not redeploy on every push. It deploys to DOKS and is idempotent (re-running upgrades in place). Required GitHub Secrets: `DOKS_KUBECONFIG`, `ZITADEL_DB_PASSWORD`, `ZITADEL_MASTERKEY` (**exactly 32 chars**), `APISIX_ADMIN_KEY`. Full detail in `docs/doks-deployment.md`.
 
 ## Conventions & gotchas
 
