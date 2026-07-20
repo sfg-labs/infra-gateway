@@ -140,22 +140,56 @@ spec:
         # Browser clients (admin-web) POST JSON here, which triggers a CORS
         # preflight OPTIONS the backend itself doesn't handle (tsoa only
         # generates the POST route) — answer it at the gateway instead.
+        # ------------------------------------------------------------------
+        # CORS HERE REFLECTS DEPLOYED REALITY — DO NOT "FIX" IT IN PASSING.
+        #
+        # `allow_origins: '**'` together with `allow_credential: true` is the
+        # classic unsafe CORS combination and will look like a bug. It is
+        # recorded here because it is what is actually running on the cluster
+        # (verified against the live ApisixRoute, 2026-07-20).
+        #
+        # An earlier revision of this file carried stricter values (an explicit
+        # origin list, `allow_credential: false`, `allow_methods: POST,OPTIONS`).
+        # Those were NEVER applied: they reached this file without being
+        # reviewed as a security change, and applying them would also have
+        # broken `GET /auth/docs`, which is served by this same rule but is not
+        # in a POST,OPTIONS method list. The file has been reconciled DOWN to
+        # the live values so that a CD run is a no-op rather than an unreviewed
+        # security + availability change applied by a deploy script.
+        #
+        # Tightening this is a deliberate follow-up with its own testing, not a
+        # drive-by edit. Before narrowing `allow_origins`, the origin list must
+        # be verified against every real caller (admin-web prod and dev, local
+        # dev hosts, mobile/webview clients, anything else that presents an
+        # Origin header) — an origin missing from that list fails preflight
+        # silently, with no ACAO header and a client-side block that is not
+        # visible in gateway logs.
+        # ------------------------------------------------------------------
         - name: cors
           enable: true
           config:
-            # suwalka-dev has no TLS yet (served over plain http), so both schemes are
-            # listed — the browser's Origin header must match exactly or the preflight
-            # is silently dropped (no ACAO header back, request blocked client-side).
-            allow_origins: "http://localhost:3000,http://localhost:3010,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
-            allow_methods: "POST,OPTIONS"
-            allow_headers: "*"
-            allow_credential: false
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
             max_age: 3600
         - name: request-id
           enable: true
           config:
             header_name: X-Request-Id
             include_in_response: true
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+        # NOTE: limit-req is last in this list to match the deployed object
+        # exactly, so that `kubectl diff` on this file is clean. Plugin
+        # execution order in APISIX is by plugin priority, not by position in
+        # this array, so the ordering here is cosmetic — but it is load-bearing
+        # for drift detection. Keep it.
         - name: limit-req
           enable: true
           config:
@@ -197,13 +231,81 @@ spec:
             rejected_code: 429
             key_type: var
             key: remote_addr
-        - name: response-rewrite
+    # Provisioning admin surface — JWT-protected (gateway injects X-Userinfo).
+    - name: suwalka-auth-admin
+      match:
+        hosts:
+          - api.faithandgamble.in
+        paths:
+          - /auth/admin/*
+        methods: [GET, POST, PUT, PATCH, DELETE]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        # This rule IS deployed with cors, even though an earlier revision of
+        # this file omitted the plugin entirely. Applying that revision would
+        # have STRIPPED CORS from /auth/admin/*, breaking every browser caller
+        # of the provisioning surface. Restored here to match live — see the
+        # CORS note on the public rule above for why the values are what they
+        # are and what tightening them requires.
+        - name: cors
           enable: true
           config:
-            headers:
-              set:
-                X-Gateway: sfg-labs
-                X-Project: suwalka
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
+            max_age: 3600
+        - name: openid-connect
+          enable: true
+          config:
+            discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+            bearer_only: true
+            realm: suwalka
+            client_id: "bearer-only-unused"
+            client_secret: "bearer-only-unused"
+            use_jwks: true
+            set_userinfo_header: true
+            userinfo_header_name: X-Userinfo
+            token_signing_alg_values_expected: RS256
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            # SUSTAINED ceiling = rate = 100 req/s (burst 100 delays an
+            # overshoot, it does not raise the ceiling) — deliberately
+            # generous, and looser than the public rule above. Reasoning:
+            #
+            #   * This surface is bearer-only JWT-gated, so an unauthenticated
+            #     attacker cannot reach it at all. The threat a tight limit
+            #     would address is largely already handled by openid-connect.
+            #   * The legitimate caller is org-hr-payroll doing machine-to-
+            #     machine provisioning, including bulk imports (the last one
+            #     covered 532 employees). Those calls originate from a single
+            #     pod, so they all share ONE limit-req key — a tight limit here
+            #     would 429 a bulk import halfway through and leave employees
+            #     half-provisioned, which is a worse failure than the flood it
+            #     would be preventing.
+            #
+            # So this exists only as a backstop against a runaway retry loop,
+            # sized well above any plausible bulk provisioning burst rather
+            # than as a security control.
+            #
+            # Deviation from the tier table in docs/adding-a-service.md: that
+            # table puts "admin, config" at 30/15, which this deliberately
+            # exceeds. A 45 req/s ceiling risks 429ing a parallelised bulk
+            # provisioning run and leaving employees half-provisioned — a worse
+            # outcome than the flood it would prevent on a JWT-gated M2M route.
+            rate: 100
+            burst: 100
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
     # Forced password change on first login — PUBLIC by construction.
     #
     # Employees are provisioned with a one-time password handed over in person
@@ -239,13 +341,19 @@ spec:
         # problem as the public rule applies — the backend only serves POST.
         # Without this the preflight fails and the endpoint is unreachable from
         # the UI, which is the exact dead-end this route is meant to remove.
+        #
+        # Values are copied from the public rule above and match what is
+        # deployed — see the CORS note there before changing them. The two
+        # rules are tightened together or not at all; a browser that can reach
+        # /auth/login but not /auth/password/change is a dead end for exactly
+        # the first-login users this route exists to serve.
         - name: cors
           enable: true
           config:
-            allow_origins: "http://localhost:3000,http://localhost:3010,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,http://suwalka-dev.faithandgamble.in"
-            allow_methods: "POST,OPTIONS"
-            allow_headers: "*"
-            allow_credential: false
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
             max_age: 3600
         - name: request-id
           enable: true
@@ -332,64 +440,3 @@ spec:
               set:
                 X-Gateway: sfg-labs
                 X-Project: suwalka
-    # Provisioning admin surface — JWT-protected (gateway injects X-Userinfo).
-    - name: suwalka-auth-admin
-      match:
-        hosts:
-          - api.faithandgamble.in
-        paths:
-          - /auth/admin/*
-        methods: [GET, POST, PUT, PATCH, DELETE]
-      backends:
-        - serviceName: suwalka-auth
-          servicePort: 3000
-      plugins:
-        - name: openid-connect
-          enable: true
-          config:
-            discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
-            bearer_only: true
-            realm: suwalka
-            client_id: "bearer-only-unused"
-            client_secret: "bearer-only-unused"
-            use_jwks: true
-            set_userinfo_header: true
-            userinfo_header_name: X-Userinfo
-            token_signing_alg_values_expected: RS256
-        - name: request-id
-          enable: true
-          config:
-            header_name: X-Request-Id
-            include_in_response: true
-        - name: limit-req
-          enable: true
-          config:
-            # SUSTAINED ceiling = rate = 100 req/s (burst 100 delays an
-            # overshoot, it does not raise the ceiling) — deliberately
-            # generous, and looser than the public rule above. Reasoning:
-            #
-            #   * This surface is bearer-only JWT-gated, so an unauthenticated
-            #     attacker cannot reach it at all. The threat a tight limit
-            #     would address is largely already handled by openid-connect.
-            #   * The legitimate caller is org-hr-payroll doing machine-to-
-            #     machine provisioning, including bulk imports (the last one
-            #     covered 532 employees). Those calls originate from a single
-            #     pod, so they all share ONE limit-req key — a tight limit here
-            #     would 429 a bulk import halfway through and leave employees
-            #     half-provisioned, which is a worse failure than the flood it
-            #     would be preventing.
-            #
-            # So this exists only as a backstop against a runaway retry loop,
-            # sized well above any plausible bulk provisioning burst rather
-            # than as a security control.
-            #
-            # Deviation from the tier table in docs/adding-a-service.md: that
-            # table puts "admin, config" at 30/15, which this deliberately
-            # exceeds. A 45 req/s ceiling risks 429ing a parallelised bulk
-            # provisioning run and leaving employees half-provisioned — a worse
-            # outcome than the flood it would prevent on a JWT-gated M2M route.
-            rate: 100
-            burst: 100
-            rejected_code: 429
-            key_type: var
-            key: remote_addr
