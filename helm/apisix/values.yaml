@@ -2,6 +2,16 @@
 # Chart: apisix/apisix  (helm repo add apisix https://charts.apiseven.com)
 # Deployed to namespace: sfg-gateway
 
+# RATE LIMITS DEPEND ON THIS VALUE — read before scaling out.
+# APISIX limit-req keeps its counter state PER NODE, not cluster-wide. Every
+# `rate`/`burst` in routes/*.yaml was sized assuming this is 1, so raising it
+# multiplies every rate limit in the estate by the new replica count. Raising
+# this from 1 to 3 does not just add HA — it silently triples the effective
+# ceiling on every credential route, including the deliberately tight
+# /auth/password/change limit. If you change this, divide those numbers
+# accordingly (or move limit-req to a shared-store policy first). The full
+# reasoning, including why source-IP collapse makes these buckets shared, is in
+# the header comment of routes/suwalka-auth.yaml.
 replicaCount: 1   # single-node DOKS cluster — anti-affinity gives no HA on one node
 
 apisix:

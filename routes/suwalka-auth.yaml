@@ -41,17 +41,47 @@
 #
 # The numbers below are therefore deliberately sized as a coarse VOLUMETRIC
 # BACKSTOP against floods, with wide headroom over real peak load. They are
-# explicitly NOT an anti-brute-force / anti-enumeration control. Per-account
-# lockout and credential-stuffing defence must live in suwalka-auth / Zitadel,
-# which can key on the actual account. Do not tighten these numbers expecting
-# brute-force protection until source-IP preservation is fixed (etp=Local with
-# APISIX scaled to >=3 replicas or run as a DaemonSet, or PROXY protocol
-# enabled on the DO LB and in APISIX). See the PR opening this file for detail.
+# explicitly NOT an anti-brute-force / anti-enumeration control.
 #
-# Note also: limit-req state is per-APISIX-node. There is 1 replica today, so
-# the configured rate is the real rate. If APISIX is ever scaled out, the
-# effective platform-wide limit is multiplied by the replica count and these
-# numbers must be divided accordingly.
+# WHAT ACTUALLY PROTECTS THESE ROUTES TODAY — read this before relying on any
+# compensating control. Verified 2026-07-20 against the live Zitadel DB
+# (projections.lockout_policies3): max_password_attempts = 0 and
+# max_otp_attempts = 0 on the default policy. In Zitadel, 0 means UNLIMITED.
+# There is therefore NO per-account lockout anywhere in the stack right now.
+# An earlier draft of this file deferred to "per-account lockout in
+# suwalka-auth / Zitadel" as the real control; that control DOES NOT EXIST.
+#
+# So the honest inventory of what stands between an attacker and a password
+# guess is exactly three things:
+#   1. these volumetric limit-req caps (shared-bucket, see above — they cap
+#      total volume, they cannot single out the attacker);
+#   2. the 1200ms constant-time response floor suwalka-auth applies to every
+#      password-change response, which caps useful concurrency far more
+#      effectively than it caps rate;
+#   3. one-time passwords being handed over in person and short-lived.
+# That is thin. The genuine fix is to set max_password_attempts to a non-zero
+# value in Zitadel; it is tracked as a follow-up to the PR opening this file
+# and should not be assumed done just because this comment mentions it.
+#
+# Do not tighten these numbers expecting brute-force protection until source-IP
+# preservation is fixed (etp=Local with APISIX scaled to >=3 replicas or run as
+# a DaemonSet, or PROXY protocol enabled on the DO LB and in APISIX). See the
+# PR opening this file for detail.
+#
+# HOW TO READ `rate` AND `burst` (this was got wrong in an earlier draft):
+# APISIX limit-req is a LEAKY BUCKET (resty.limit.req). `rate` is the SUSTAINED
+# admitted throughput. `burst` is the amount of excess that is allowed to be
+# DELAYED (the plugin sleeps the request) rather than admitted for free —
+# anything beyond rate+burst is rejected with `rejected_code`. So the sustained
+# ceiling of a rule is `rate`, NOT `rate + burst`. Burst only buys tolerance
+# for short spikes, and it buys it by adding latency, not capacity.
+#
+# Note also: limit-req state is per-APISIX-node. There is 1 replica today
+# (verified: deployment sfg-apisix, replicas=1), so the configured rate is the
+# real rate. If APISIX is ever scaled out, the effective platform-wide limit is
+# multiplied by the replica count and these numbers must be divided
+# accordingly. helm/apisix/values.yaml carries a back-reference to this note at
+# its replicaCount setting.
 # ---------------------------------------------------------------------------
 ---
 apiVersion: cert-manager.io/v1
@@ -129,8 +159,9 @@ spec:
         - name: limit-req
           enable: true
           config:
-            # Ceiling = rate + burst = 60 req/s (excess within burst is delayed,
-            # beyond it is rejected with 429).
+            # SUSTAINED ceiling = rate = 30 req/s. Burst 30 does not add
+            # capacity — it lets a 30 req/s overshoot be DELAYED rather than
+            # 429'd (see "HOW TO READ rate AND burst" in the header).
             #
             # Sizing: this rule also carries /auth/refresh, which every active
             # session hits on its own schedule, and /auth/docs. Peak legitimate
@@ -139,13 +170,23 @@ spec:
             # each costing a CORS preflight OPTIONS plus the POST: roughly
             # 3-6 req/s, plus refresh traffic well under 1 req/s.
             #
-            # 60 req/s is ~10x that peak. The headroom is intentional: because
-            # remote_addr collapses to a node IP for ~2/3 of traffic (see the
-            # header comment), this bucket is shared platform-wide, so anything
-            # near real peak load would 429 innocent staff. Tighter than the
-            # 60/30 general-API precedent (ceiling 90) used by the other
-            # services, but not "tight" — tight is unsafe until source-IP
-            # preservation is fixed.
+            # Re-checked against the corrected leaky-bucket reading: 30 req/s
+            # sustained is 5-10x that peak, not the 10-20x an earlier draft
+            # claimed. That is still comfortable. The stress case is the storm
+            # compressing rather than growing — 100 staff x 2 requests landing
+            # inside 10s is ~20 req/s, which still fits under 30, and burst 30
+            # absorbs the overshoot above that by delaying it instead of
+            # failing it. Keeping 30/30 rather than raising: the binding risk
+            # on this route is the shared bucket 429ing innocent staff, and
+            # 5-10x headroom over a peak we have actually measured is the right
+            # side of that trade.
+            #
+            # The headroom is intentional: because remote_addr collapses to a
+            # node IP for most traffic (see the header comment), this bucket is
+            # shared platform-wide, so anything near real peak load would 429
+            # innocent staff. Tighter than the 60/30 general-API precedent used
+            # by the other services, but not "tight" — tight is unsafe until
+            # source-IP preservation is fixed.
             #
             # Deviation from the tier table in docs/adding-a-service.md: this
             # is a credential surface, so it sits below "Standard API" (100/50)
@@ -179,7 +220,16 @@ spec:
         hosts:
           - api.faithandgamble.in
         paths:
+          # Both spellings are matched deliberately. APISIX paths are exact
+          # (no wildcard here), but Express runs with strict routing OFF, so
+          # the backend serves /auth/password/change/ identically. Listing only
+          # the bare path would 404 the trailing-slash form at the gateway for
+          # a request the backend would have accepted — a mismatch that is
+          # latent today (no caller references the path yet) and would surface
+          # as a confusing gateway-vs-backend discrepancy the first time some
+          # client or proxy normalised the URL with a trailing slash.
           - /auth/password/change
+          - /auth/password/change/
         methods: [POST, OPTIONS]
       backends:
         - serviceName: suwalka-auth
@@ -205,20 +255,67 @@ spec:
         - name: limit-req
           enable: true
           config:
-            # Ceiling = rate + burst = 15 req/s. Much tighter than /auth/login
+            # SUSTAINED ceiling = rate = 5 req/s (burst 10 delays an overshoot,
+            # it does not raise the ceiling). Much tighter than /auth/login
             # because legitimate demand is near zero: an employee changes their
             # initial password exactly once, ever. Even an HR-led onboarding
             # session putting 50 new joiners through it inside ten minutes is
-            # under 0.1 req/s, so 15 req/s leaves two orders of magnitude of
-            # headroom and will not lock out an onboarding batch even though
-            # the bucket is effectively shared.
+            # under 0.1 req/s.
             #
-            # This caps a password-guessing flood but does NOT make the route
-            # safe on its own — 15 req/s is still ~1.3M attempts/day, and the
-            # shared-bucket problem means the gateway cannot distinguish the
-            # attacker from everyone else. Per-account lockout and throttling
-            # in suwalka-auth / Zitadel is the control that actually stops
-            # enumeration here; this is only a volumetric backstop.
+            # READ THIS BEFORE TRUSTING THAT HEADROOM. An earlier draft said
+            # this "will not lock out an onboarding batch even though the
+            # bucket is effectively shared". That is true only when nobody is
+            # attacking. Under the exact flood this limit exists to stop it is
+            # FALSE, and this is the route where the shared-bucket problem
+            # bites hardest:
+            #
+            #   * Access-log sampling (20k lines, 2026-07-20) found /auth/*
+            #     arriving SNAT'd to a node IP 12 times vs 4 times with a real
+            #     client IP — so ~75% of legitimate traffic here shares a
+            #     bucket, worse than the ~2/3 the header comment estimates.
+            #   * An attacker whose traffic SNATs to 10.104.0.3 exhausts that
+            #     5 req/s bucket outright. Every legitimate first-login
+            #     password change routed through the same node IP then gets a
+            #     persistent 429.
+            #   * Because /auth/login returns 403 PASSWORD_CHANGE_REQUIRED
+            #     until the change succeeds, such an employee is FULLY LOCKED
+            #     OUT for the duration of the flood. There is no workaround
+            #     available to them — this is the one action they cannot route
+            #     around.
+            #
+            # Blast radius is bounded: already-provisioned staff keep logging
+            # in normally, only first-login users are affected. And it still
+            # beats having no limit. But it is a real availability failure
+            # mode, not a hypothetical one, and it should be stated as such.
+            #
+            # WHY 5 AND NOT HIGHER, given that consequence: raising the rate
+            # does not buy availability under the flood. Saturation is
+            # attacker-controlled — an attacker floods to whatever rate is
+            # needed to fill the bucket, so 10 or 20 req/s gets exhausted just
+            # as completely as 5, while multiplying the guesses/day an attacker
+            # gets for free. Headroom is not the binding constraint here;
+            # source-IP attribution is. Raising the number trades real security
+            # for availability that would not actually materialise.
+            #
+            # Nor is it lowered: legitimate demand (~0.1 req/s) would tolerate
+            # 1-2 req/s, but that gain is marginal against an attacker and it
+            # eats the margin the dev environment needs for parallel test runs.
+            #
+            # What this cap actually is: a volumetric backstop. 5 req/s is
+            # still ~432k attempts/day, so it is NOT a brute-force control, and
+            # per the header comment there is currently NO per-account lockout
+            # behind it (Zitadel max_password_attempts = 0). The two changes
+            # that would actually fix this route are (a) enabling Zitadel
+            # account lockout and (b) restoring source-IP preservation so this
+            # limit becomes per-client. Until then, do not read this number as
+            # protection.
+            #
+            # Concurrency note: suwalka-auth holds every password-change
+            # response to a 1200ms constant-time floor. A fully-engaged burst
+            # (rate+burst = 15 req/s admitted) therefore implies up to ~18
+            # concurrent in-flight requests against that backend, and delayed
+            # burst requests hold a gateway connection while they sleep. Keep
+            # that in mind before raising either number.
             #
             # Deviation from the tier table in docs/adding-a-service.md: below
             # every tier there, including "Webhooks (public)" (20/10), because
@@ -267,8 +364,9 @@ spec:
         - name: limit-req
           enable: true
           config:
-            # Ceiling = rate + burst = 200 req/s — deliberately generous, and
-            # looser than the public rule above. Reasoning:
+            # SUSTAINED ceiling = rate = 100 req/s (burst 100 delays an
+            # overshoot, it does not raise the ceiling) — deliberately
+            # generous, and looser than the public rule above. Reasoning:
             #
             #   * This surface is bearer-only JWT-gated, so an unauthenticated
             #     attacker cannot reach it at all. The threat a tight limit
