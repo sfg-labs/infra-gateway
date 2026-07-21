@@ -37,6 +37,7 @@ spec:
       - /api/perf/*
       - /api/docs/*
       - /api/helpdesk/*
+      - /api/grievances/*
       - /api/training/*
       # Unprefixed careers/recruitment surface. This path is LIVE and was
       # missing from this file — applying the file without it would have
