@@ -42,6 +42,12 @@ plugin_attr:
 
 plugins:
   - openid-connect
+  # Serves the bare /org/swagger → /org/swagger/ redirect (see routes/public.yaml).
+  # This list is an explicit allowlist: APISIX rejects a route referencing any plugin not
+  # named here with 400 "unknown plugin [...]", which aborts setup-routes.sh. Production
+  # needs no equivalent entry — helm/apisix/values.yaml sets no `plugins:` list, so the
+  # production APISIX runs the stock default set, which already includes `redirect`.
+  - redirect
   - limit-req
   - limit-count
   - request-id

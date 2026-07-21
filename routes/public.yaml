@@ -199,16 +199,59 @@ spec:
       servicePort: 3001
       weight: 100
 
-  # Suwalka HR/Payroll Swagger UI — public read-only API docs, no auth required.
-  # External path is /org/swagger(/*); service actually serves it at /docs, so
-  # proxy-rewrite strips the external prefix before forwarding upstream.
-  - name: suwalka-hr-docs
+  # Bare /org/swagger → 301 → /org/swagger/ (trailing slash).
+  #
+  # WHY THIS RULE EXISTS — the bare path must NEVER reach the upstream.
+  # If it does, proxy-rewrite forwards it as /docs and swagger-ui-express answers with its
+  # own redirect to the trailing-slash form — but that Location is the service's INTERNAL
+  # path (`Location: /docs/`), which has no route on this gateway. The browser follows it
+  # and lands on 404 Route Not Found. Redirecting here, at the edge, keeps the Location in
+  # the EXTERNAL path namespace, so the upstream only ever sees /docs/ and never gets the
+  # chance to leak /docs/.
+  #
+  # The trailing slash itself is not cosmetic: swagger-ui's assets are relative
+  # (./swagger-ui.css), so they only resolve against /org/swagger/ — serving the UI at the
+  # bare path would 404 every asset. A redirect is the correct shape, not a second proxy.
+  #
+  # The `redirect` plugin short-circuits during the rewrite phase, so `backends` below is
+  # never contacted — it is present only because the CRD and tests/validate-routes.sh
+  # require every rule to declare one.
+  #
+  # MUST stay EXACTLY the bare path (no /* wildcard), and the proxy rule below must NOT
+  # also list it — the two rules are deliberately DISJOINT. If this rule ever matched
+  # /org/swagger/ or an asset path, it would redirect to itself: an infinite loop.
+  - name: suwalka-hr-docs-redirect
     match:
       hosts:
       - api.suwalka-pos.sfg-labs.in
       - api.faithandgamble.in
       paths:
       - /org/swagger
+      methods:
+      - GET
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: redirect
+      enable: true
+      config:
+        uri: /org/swagger/
+        ret_code: 301
+
+  # Suwalka HR/Payroll Swagger UI — public read-only API docs, no auth required.
+  # External path is /org/swagger/(*); service actually serves it at /docs, so
+  # proxy-rewrite strips the external prefix before forwarding upstream.
+  # /org/swagger/* also matches the bare trailing-slash form /org/swagger/ (the wildcard
+  # matches empty), which is the path the redirect rule above sends browsers to.
+  # The bare, slash-less /org/swagger is intentionally NOT listed here — see that rule.
+  - name: suwalka-hr-docs
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
       - /org/swagger/*
       methods:
       - GET
