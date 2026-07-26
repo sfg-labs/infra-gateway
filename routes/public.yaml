@@ -242,6 +242,13 @@ spec:
   # both enforced in-app (webhooks.controller + house rule 6 in zimma-api
   # CLAUDE.md). Strict rate limit, same posture as baithak-razorpay-webhook.
   #
+  # PATH PREFIX (2026-07-26): matched under /zimma/api/webhooks/* — see the
+  # PATH PREFIX note at the top of routes/zimma-api.yaml for why (shared-host
+  # collision avoidance on api.faithandgamble.in, same fix already applied to
+  # routes/suwalka-ai-services.yaml's /docs -> /ai-service/docs). proxy-rewrite
+  # regex_uri below strips /zimma before proxying, so zimma-api's in-app
+  # `app.use("/api/webhooks", webhooksRouter())` mount is unchanged.
+  #
   # WILDCARD, DELIBERATELY (F8): CLAUDE.md's "public paths listed explicitly,
   # no wildcard" convention is kept here because the varying path segment is
   # the meeting-platform integrationId, a UUID — it cannot be enumerated into
@@ -257,7 +264,7 @@ spec:
       hosts:
       - api.faithandgamble.in
       paths:
-      - /api/webhooks/*
+      - /zimma/api/webhooks/*
       methods:
       - POST
     backends:
@@ -265,6 +272,12 @@ spec:
       servicePort: 3001
       weight: 100
     plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/zimma(.*)"
+        - "$1"
     - name: limit-req
       enable: true
       config:

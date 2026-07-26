@@ -196,22 +196,29 @@ create_health_route "61" "suwalka-hr-health" "api.suwalka.localhost" "5"
 # route below for case/trailing-slash variants of /api/auth/sso, letting
 # them reach the (mock) backend unauthenticated. See routes/zimma-api.yaml
 # for the full writeup; tests/smoke/smoke-test-local.sh asserts this.
-create_exact_route "70" "zimma-sso"          "api.zimma.localhost" "/api/auth/sso"    "6" "true"
-create_exact_route "71" "zimma-sso-slash"    "api.zimma.localhost" "/api/auth/sso/"   "6" "true"
-create_exact_route "72" "zimma-login"        "api.zimma.localhost" "/api/auth/login"    "6" "false"
-create_exact_route "73" "zimma-login-slash"  "api.zimma.localhost" "/api/auth/login/"   "6" "false"
-create_exact_route "74" "zimma-signup"       "api.zimma.localhost" "/api/auth/signup"   "6" "false"
-create_exact_route "75" "zimma-signup-slash" "api.zimma.localhost" "/api/auth/signup/"  "6" "false"
+#
+# PATH PREFIX mirrored here too (2026-07-26): production now matches these
+# under /zimma/* (see routes/zimma-api.yaml's PATH PREFIX note — shared-host
+# collision avoidance on api.faithandgamble.in). This local mock does not
+# implement proxy-rewrite/regex_uri (mock-backend is httpbin and doesn't care
+# what path it was reached on), so only the match-path arg below changes;
+# the create_route/create_exact_route plumbing is untouched.
+create_exact_route "70" "zimma-sso"          "api.zimma.localhost" "/zimma/api/auth/sso"    "6" "true"
+create_exact_route "71" "zimma-sso-slash"    "api.zimma.localhost" "/zimma/api/auth/sso/"   "6" "true"
+create_exact_route "72" "zimma-login"        "api.zimma.localhost" "/zimma/api/auth/login"    "6" "false"
+create_exact_route "73" "zimma-login-slash"  "api.zimma.localhost" "/zimma/api/auth/login/"   "6" "false"
+create_exact_route "74" "zimma-signup"       "api.zimma.localhost" "/zimma/api/auth/signup"   "6" "false"
+create_exact_route "75" "zimma-signup-slash" "api.zimma.localhost" "/zimma/api/auth/signup/"  "6" "false"
 # Non-auth resource paths — open at the gateway, zimma-api validates its own
 # 7-day JWT in-app (see the sfg-auth: mixed note in CLAUDE.md).
-create_route "76" "zimma-tasks"    "api.zimma.localhost" "/api/tasks"    "6" "false"
-create_route "77" "zimma-members"  "api.zimma.localhost" "/api/members" "6" "false"
+create_route "76" "zimma-tasks"    "api.zimma.localhost" "/zimma/api/tasks"    "6" "false"
+create_route "77" "zimma-members"  "api.zimma.localhost" "/zimma/api/members" "6" "false"
 # Public webhooks — no auth at all, same posture as routes/public.yaml's
 # zimma-webhooks (HMAC verified in-app). No /health or /ready mirror here:
 # F6 removed those from the production public.yaml (probes hit the pod
 # directly; a gateway health route added no value), so there's nothing to
 # mirror.
-create_route "78" "zimma-webhooks" "api.zimma.localhost" "/api/webhooks" "6" "false"
+create_route "78" "zimma-webhooks" "api.zimma.localhost" "/zimma/api/webhooks" "6" "false"
 
 echo ""
 echo "========================================================"
@@ -224,10 +231,10 @@ echo ""
 echo "  # Protected without token (expect 401):"
 echo "  curl -H 'Host: api.nma.localhost' http://localhost:9080/api/audit"
 echo "  curl -H 'Host: api.suwalka.localhost' http://localhost:9080/api/hr/employees"
-echo "  curl -X POST -H 'Host: api.zimma.localhost' http://localhost:9080/api/auth/sso"
+echo "  curl -X POST -H 'Host: api.zimma.localhost' http://localhost:9080/zimma/api/auth/sso"
 echo ""
 echo "  # Zimma SSO case-variant — must NOT reach upstream unauth (expect 404, no route):"
-echo "  curl -X POST -H 'Host: api.zimma.localhost' http://localhost:9080/api/auth/SSO"
+echo "  curl -X POST -H 'Host: api.zimma.localhost' http://localhost:9080/zimma/api/auth/SSO"
 echo ""
 echo "  # Zitadel OIDC discovery:"
 echo "  curl http://localhost:8080/.well-known/openid-configuration | jq .issuer"

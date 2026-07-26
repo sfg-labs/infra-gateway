@@ -43,19 +43,29 @@ check "Baithak — fake token" "401" "$(http -H 'Host: api.baithak.localhost' -H
 
 echo ""
 echo "===> [4/5] Zimma — SSO-only openid-connect; F1 regression guard"
-check "Zimma SSO — no token"   "401" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/sso")"
-check "Zimma SSO — fake token" "401" "$(http -X POST -H 'Host: api.zimma.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/api/auth/sso")"
+# PATH PREFIX (2026-07-26): all zimma paths moved under /zimma/* — see the
+# PATH PREFIX note at the top of routes/zimma-api.yaml. Asserted against the
+# prefixed path here since that's what the local mirror in
+# docker/apisix/setup-routes.sh now registers; a bare /api/auth/sso should
+# match no route at all (404), which case-variant assertion below now also
+# proves for the un-prefixed form.
+check "Zimma SSO — no token"   "401" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/sso")"
+check "Zimma SSO — fake token" "401" "$(http -X POST -H 'Host: api.zimma.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/zimma/api/auth/sso")"
 # F1 (CRITICAL, fixed in routes/zimma-api.yaml): a wildcard /api/auth/* app
 # rule used to shadow the exact SSO rule for case/trailing-slash variants,
 # letting them reach zimma-api unauthenticated with attacker-supplied
 # X-Userinfo. The fix replaces that wildcard with explicit login/signup
-# paths, so a case-variant like /api/auth/SSO now matches no route at all —
-# APISIX 404s it before it is ever proxied to the (mock) backend. This is
-# the regression guard for that fix; see docker/apisix/setup-routes.sh for
-# the local route mirror it depends on.
-check "Zimma SSO case-variant — no route, not proxied unauth" "404" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/SSO")"
-check "Zimma login — open at gateway, in-app JWT"  "200" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/login")"
-check "Zimma signup — open at gateway, in-app JWT" "200" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/signup")"
+# paths, so a case-variant like /zimma/api/auth/SSO now matches no route at
+# all — APISIX 404s it before it is ever proxied to the (mock) backend. This
+# is the regression guard for that fix; see docker/apisix/setup-routes.sh
+# for the local route mirror it depends on. Bypassing the prefix entirely
+# (unprefixed /api/auth/SSO) is asserted too — it must ALSO be a bare 404
+# (no route claims un-prefixed paths any more), proving the prefix isn't
+# just cosmetic but is actually required to reach zimma-api at all.
+check "Zimma SSO case-variant — no route, not proxied unauth" "404" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/SSO")"
+check "Zimma SSO — unprefixed path bypass — no route" "404" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/sso")"
+check "Zimma login — open at gateway, in-app JWT"  "200" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/login")"
+check "Zimma signup — open at gateway, in-app JWT" "200" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/signup")"
 
 echo ""
 echo "===> [5/5] Zitadel OIDC discovery (expect 200 + valid JSON)"
