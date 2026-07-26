@@ -127,6 +127,43 @@ spec:
     # `/zimma` off the front of whatever matched (exact /zimma/api/auth/sso
     # or /zimma/api/auth/sso/) before proxying to zimma-api, same pattern as
     # routes/suwalka-ai-services.yaml's /ai-service/* prefix.
+    #
+    # X-Client-IP (2026-07-26, client-IP header for zimma rate limiting):
+    # zimma-api used to key its rate limiter on the SOCKET peer IP and trust
+    # it only when it exactly matched APISIX's pod IP (TRUST_PROXY, /32
+    # only). That pod IP rotates on every rollout/scale/eviction with no
+    # mechanism to keep TRUST_PROXY current, and the failure is SILENT — a
+    # stale value doesn't crash, it just stops matching, so the limiter
+    # falls back to treating every client as the same bucket. Injecting the
+    # client IP here instead moves trust from "the socket peer happens to be
+    # a pod we hardcoded" to "the header carries X-Gateway-Secret", which
+    # doesn't change when pods do. zimma-api trusts X-Client-IP ONLY when
+    # X-Gateway-Secret (above) matches — so it is exactly as forgeable as
+    # X-Userinfo already is on this route, no new trust surface.
+    # IMPORTANT: this `set` OVERWRITES any X-Client-IP the caller already
+    # sent, so a client cannot forge their own rate-limit identity by
+    # attaching X-Client-IP to the inbound request — whatever value arrives
+    # here is discarded and replaced with $remote_addr as APISIX sees it.
+    # Variable choice: $remote_addr, not $http_x_forwarded_for. The `real-ip`
+    # plugin is NOT configured anywhere in this repo (grepped helm/ and
+    # routes/ — no hits), and per the RATE LIMITING note in
+    # routes/suwalka-auth.yaml (verified 2026-07-20 against the live
+    # gateway), the DO LB is L4/TCP passthrough with no PROXY protocol and
+    # api.faithandgamble.in is not behind Cloudflare — so nothing upstream of
+    # APISIX ever populates X-Forwarded-For. $http_x_forwarded_for would
+    # therefore just be whatever the CLIENT chose to send: fully forgeable,
+    # letting an attacker pick a fresh IP per request to dodge the limiter
+    # entirely. $remote_addr is the actual TCP peer as APISIX's nginx sees
+    # it — not attacker-settable — even though (same suwalka-auth.yaml note)
+    # it is degraded by this cluster's externalTrafficPolicy: Cluster, which
+    # SNAT's to a node IP for traffic landing on a non-APISIX-hosting node.
+    # That SNAT issue is a pre-existing, repo-wide gap already tracked there
+    # (fix: etp=Local + >=3 APISIX replicas, or PROXY protocol) — out of
+    # scope for this change, which only removes zimma-api's dependency on a
+    # manually-maintained, rotating pod-IP allowlist. $remote_addr also
+    # matches `key: remote_addr` already used for limit-req by every other
+    # route in this repo, so this is not a new assumption, just the same one
+    # made visible to zimma-api via a header instead of an implicit socket.
     - name: proxy-rewrite
       enable: true
       config:
@@ -136,6 +173,7 @@ spec:
         headers:
           set:
             X-Gateway-Secret: ${ZIMMA_GATEWAY_SECRET}
+            X-Client-IP: $remote_addr
     # cors runs at a higher APISIX plugin priority than openid-connect, so it
     # answers the credential-less preflight itself. Origins are byte-exact
     # (scheme + host + port; no trailing slash):
@@ -250,12 +288,38 @@ spec:
     # and nested (/zimma/api/tasks/123 -> /api/tasks/123) forms identically:
     # `(.*)` captures everything after the literal `/zimma`, including the
     # empty string for a bare match, and $1 replays it unprefixed.
+    #
+    # X-Client-IP — same injection, same reasoning, as the zimma-api-sso rule
+    # above (see that rule's comment for the full writeup: why this exists,
+    # why $remote_addr not $http_x_forwarded_for, and why a client-supplied
+    # X-Client-IP can't be forged through the gateway — this `set` overwrites
+    # it unconditionally). Repeated here because every non-SSO zimma path
+    # (tasks/members/meetings/pulse/policies/proposals/standup/score/
+    # admin-sync/login/signup) routes through THIS rule, not the SSO one, and
+    # zimma-api's rate limiter needs the header on this traffic too.
+    #
+    # NOTE — this rule does NOT inject X-Gateway-Secret (only the SSO rule
+    # above does, to protect X-Userinfo, which this rule never receives —
+    # see the AUTH NUANCE note at the top of this file). If zimma-api's
+    # rate-limit trust model is "trust X-Client-IP only when X-Gateway-Secret
+    # matches", uniformly, then this rule's traffic would arrive with
+    # X-Client-IP but WITHOUT X-Gateway-Secret, and zimma-api would need a
+    # secret-independent basis for trusting it here (e.g. "only APISIX can
+    # reach the zimma-api Service at all"), which this repo does not verify
+    # (no NetworkPolicy pinning zimma-api's Service to APISIX-only ingress
+    # was found). Flagging this as an open cross-repo question rather than
+    # guessing zimma-api's implementation — if the zimma-api side does need
+    # a secret on this rule too, add X-Gateway-Secret: ${ZIMMA_GATEWAY_SECRET}
+    # to this same headers.set block (mirroring the SSO rule) in a follow-up.
     - name: proxy-rewrite
       enable: true
       config:
         regex_uri:
         - "^/zimma(.*)"
         - "$1"
+        headers:
+          set:
+            X-Client-IP: $remote_addr
     # Gateway CORS owns browser CORS for these paths — zimma-api's app-level
     # cors() middleware is disabled when GATEWAY_MODE=1 (see the zimma-api chart
     # configmap). Same byte-exact origin list as the SSO rule above.

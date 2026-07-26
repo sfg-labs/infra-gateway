@@ -70,25 +70,25 @@ has_gateway_header() {
   fi
 }
 
-echo "===> [1/5] Health check (public, no auth needed, expect 200)"
+echo "===> [1/6] Health check (public, no auth needed, expect 200)"
 check "NMA health"     "200" "$(http -H 'Host: api.nma.localhost'     "${GATEWAY}/health")"
 check "Baithak health" "200" "$(http -H 'Host: api.baithak.localhost' "${GATEWAY}/health")"
 check "CMS health"     "200" "$(http -H 'Host: api.cms.localhost'     "${GATEWAY}/health")"
 
 echo ""
-echo "===> [2/5] Protected routes without token (expect 401)"
+echo "===> [2/6] Protected routes without token (expect 401)"
 check "NMA /api/ — no token"     "401" "$(http -H 'Host: api.nma.localhost'     "${GATEWAY}/api/anything")"
 check "Baithak /api/ — no token" "401" "$(http -H 'Host: api.baithak.localhost' "${GATEWAY}/api/anything")"
 check "CMS /api/ — no token"     "401" "$(http -H 'Host: api.cms.localhost'     "${GATEWAY}/api/anything")"
 
 echo ""
-echo "===> [3/5] Protected routes with fake token (expect 401)"
+echo "===> [3/6] Protected routes with fake token (expect 401)"
 FAKE="Bearer eyJhbGciOiJSUzI1NiJ9.fake.sig"
 check "NMA — fake token"     "401" "$(http -H 'Host: api.nma.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/api/anything")"
 check "Baithak — fake token" "401" "$(http -H 'Host: api.baithak.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/api/anything")"
 
 echo ""
-echo "===> [4/5] Zimma — SSO-only openid-connect; F1 regression guard"
+echo "===> [4/6] Zimma — SSO-only openid-connect; F1 regression guard"
 # PATH PREFIX (2026-07-26): all zimma paths moved under /zimma/* — see the
 # PATH PREFIX note at the top of routes/zimma-api.yaml. Asserted against the
 # prefixed path here since that's what the local mirror in
@@ -127,7 +127,74 @@ check "Zimma signup — open at gateway, in-app JWT" "200" "$(http -X POST -H 'H
 check "Zimma login — X-Gateway header PRESENT (sanity check on the helper)" "yes" "$(has_gateway_header -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/login")"
 
 echo ""
-echo "===> [5/5] Zitadel OIDC discovery (expect 200 + valid JSON)"
+echo "===> [5/6] X-Client-IP reaches the upstream (zimma-api rate-limit dependency)"
+# routes/zimma-api.yaml's proxy-rewrite now injects X-Client-IP: $remote_addr
+# on zimma routes (see that file for the why — zimma-api's rate limiter is
+# meant to trust this header instead of a rotating APISIX pod IP).
+# mock-backend is httpbin, which echoes every header it received back in its
+# JSON response body under "headers" — the only local signal that can prove
+# the header actually reached the upstream (a passing status code alone
+# can't; the header could be silently dropped and the route would still
+# 200). Only usable against the unprotected exact zimma routes
+# (login/signup), whose create_exact_route branch proxy-rewrites to
+# httpbin's /post; the protected SSO routes 401 before proxy-rewrite ever
+# runs (no valid local JWT to present here), so there is nothing to echo
+# for those — this section deliberately does not attempt it.
+client_ip_header_value() {
+  # Echoes the X-Client-IP value httpbin recorded (case-insensitive match,
+  # since werkzeug/httpbin title-cases header names in its echo), or
+  # "MISSING" if the key isn't present in the echoed headers at all.
+  local body
+  body="$(curl -s --max-time 10 "$@" 2>/dev/null)"
+  python3 -c "
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    headers = data.get('headers', {})
+    for k, v in headers.items():
+        if k.lower() == 'x-client-ip':
+            print(v)
+            sys.exit(0)
+    print('MISSING')
+except Exception:
+    print('MISSING')
+" <<< "${body}"
+}
+CLIENT_IP_LOGIN="$(client_ip_header_value -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/login")"
+if [[ "${CLIENT_IP_LOGIN}" != "MISSING" && -n "${CLIENT_IP_LOGIN}" ]]; then
+  echo "  PASS: Zimma login — X-Client-IP reached upstream (${CLIENT_IP_LOGIN})"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Zimma login — X-Client-IP reached upstream — expected a value, got MISSING"
+  FAIL=$((FAIL + 1))
+fi
+CLIENT_IP_SIGNUP="$(client_ip_header_value -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/zimma/api/auth/signup")"
+if [[ "${CLIENT_IP_SIGNUP}" != "MISSING" && -n "${CLIENT_IP_SIGNUP}" ]]; then
+  echo "  PASS: Zimma signup — X-Client-IP reached upstream (${CLIENT_IP_SIGNUP})"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Zimma signup — X-Client-IP reached upstream — expected a value, got MISSING"
+  FAIL=$((FAIL + 1))
+fi
+# Anti-spoofing guard: proxy-rewrite uses `headers.set` (overwrite), not
+# `headers.add` (append) — see the CRITICAL comment in routes/zimma-api.yaml.
+# If a client's own X-Client-IP survived to the upstream (whether replacing
+# the gateway's value or comma-joined alongside it), the attacker controls
+# part of zimma-api's rate-limit key and can mint unlimited buckets, which
+# defeats the entire point of this header. Substring match (not exact
+# equality) so this also catches an appended/comma-joined regression, not
+# just a full-overwrite-by-attacker regression.
+SPOOFED_LOGIN="$(client_ip_header_value -X POST -H 'Host: api.zimma.localhost' -H 'X-Client-IP: 1.2.3.4' "${GATEWAY}/zimma/api/auth/login")"
+if [[ "${SPOOFED_LOGIN}" != "MISSING" && -n "${SPOOFED_LOGIN}" && "${SPOOFED_LOGIN}" != *"1.2.3.4"* ]]; then
+  echo "  PASS: Zimma login — client-sent X-Client-IP: 1.2.3.4 did NOT survive to upstream (gateway value: ${SPOOFED_LOGIN})"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Zimma login — client-sent X-Client-IP: 1.2.3.4 was NOT overwritten — got '${SPOOFED_LOGIN}' (expected gateway's own \$remote_addr, spoofed value must not appear)"
+  FAIL=$((FAIL + 1))
+fi
+
+echo ""
+echo "===> [6/6] Zitadel OIDC discovery (expect 200 + valid JSON)"
 DISC_STATUS="$(http "${ZITADEL}/.well-known/openid-configuration")"
 check "OIDC discovery HTTP 200" "200" "${DISC_STATUS}"
 
