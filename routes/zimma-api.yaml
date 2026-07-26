@@ -43,6 +43,27 @@ spec:
   # priority 10 so this exact path wins over the general /api/auth/* rule below.
   # Only POST (+ preflight OPTIONS, answered by cors before auth): a GET
   # /api/auth/sso falls through to zimma-api-app and 404s in-app harmlessly.
+  #
+  # CRITICAL (F1, fixed): zimma-api-app used to carry a wildcard
+  # `/api/auth/*` for "everything that isn't SSO". APISIX's exact-path hash
+  # lookup is case-sensitive and does not normalize trailing slashes, while
+  # zimma-api's Express 5 app runs with `strict routing` and `case sensitive
+  # routing` both OFF (default). So `POST /api/auth/sso/` and
+  # `POST /api/auth/SSO` both MISSED this exact rule, fell through to the
+  # `/api/auth/*` wildcard on zimma-api-app (no openid-connect), and would
+  # have reached the SSO handler with NO JWKS validation and an
+  # attacker-supplied X-Userinfo — a full auth bypass. Same class of bug
+  # already documented for /auth/password/change in routes/suwalka-auth.yaml
+  # (~line 325): APISIX paths are exact/no-normalization, Express is not, and
+  # a wildcard on one side papering over an exact rule on the other is the
+  # trap. Fix: zimma-api-app now lists the auth app-paths explicitly (login,
+  # signup — the only two that exist in zimma-api's src/routes.ts) instead of
+  # wildcarding `/api/auth/*`, and this rule additionally matches
+  # /api/auth/sso/ so the trailing-slash form stays protected too.
+  # FOLLOW-UP (not this repo): zimma-api should also set Express
+  # `case sensitive routing` + `strict routing` to `true` so case/slash
+  # variants 404 in-app instead of silently aliasing — defense in depth once
+  # the gateway-side hole above is closed.
   - name: zimma-api-sso
     priority: 10
     match:
@@ -50,6 +71,7 @@ spec:
       - api.faithandgamble.in
       paths:
       - /api/auth/sso
+      - /api/auth/sso/
       methods:
       - POST
       - OPTIONS
@@ -122,12 +144,27 @@ spec:
   # Bare paths are listed alongside wildcards because APISIX's /prefix/* does NOT
   # match /prefix itself, and list/create endpoints live on the bare path
   # (GET/POST /api/tasks, GET /api/pulse, ...).
+  #
+  # AUTH PATHS ARE EXPLICIT, NOT A WILDCARD (F1 fix): this used to be
+  # `/api/auth/*`, which shadowed the zimma-api-sso exact rule for
+  # case/trailing-slash variants of /api/auth/sso (see the CRITICAL note on
+  # that rule above) and, being a wildcard, would silently absorb any future
+  # /api/auth/* endpoint zimma-api adds — including a real SSO handler if one
+  # is ever added under a name other than /sso — with no gateway-side review
+  # signal. Listed here only the two endpoints that exist today, verified
+  # against zimma-api's src/routes.ts: signup, login (both bare + trailing
+  # slash, matching the Express strict-routing-OFF behavior noted above).
+  # Adding a new /api/auth/<x> endpoint in zimma-api REQUIRES a matching
+  # addition here — it will 404 at the gateway otherwise, by design.
   - name: zimma-api-app
     match:
       hosts:
       - api.faithandgamble.in
       paths:
-      - /api/auth/*
+      - /api/auth/login
+      - /api/auth/login/
+      - /api/auth/signup
+      - /api/auth/signup/
       - /api/tasks
       - /api/tasks/*
       - /api/score/*
