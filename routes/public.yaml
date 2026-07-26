@@ -223,3 +223,75 @@ spec:
         regex_uri:
         - "^/org/swagger(.*)"
         - "/docs$1"
+
+  # Zimma health/readiness rules were REMOVED here (F6, PR #33 review). K8s
+  # liveness/readiness probes hit the pod's ClusterIP directly, never the
+  # gateway, so a gateway route for /health or /ready adds no value to the
+  # probe path itself. Worse, a bare `/health` on this SHARED host
+  # (api.faithandgamble.in) was a land-grab: org-hr and ai-services both use
+  # `/healthz`/`/readyz` on their hosts precisely to avoid colliding on the
+  # generic name. If a caller genuinely needs to check zimma-api's health
+  # through the gateway, use a distinct explicit path (e.g. `/zimma/health`),
+  # not `/health`.
+  # (N5, PR #33 round-2 review: the original version of this comment also
+  # claimed the removed rule "made tests/smoke/smoke-test.sh report the
+  # gateway healthy based on one unrelated pod" — that script only probes
+  # NMA/Baithak/CMS URLs passed in as args and never touches
+  # api.faithandgamble.in at all, so that specific claim was wrong. Dropped;
+  # the land-grab rationale above is the real reason.)
+
+  # Zimma meeting-platform webhooks (meeting-ended payloads etc.) — POST only,
+  # no JWT (the caller is a bot platform, not a browser). zimma-api MUST verify
+  # the HMAC signature over the raw body and dedupe on (source, external_id) —
+  # both enforced in-app (webhooks.controller + house rule 6 in zimma-api
+  # CLAUDE.md). Strict rate limit, same posture as baithak-razorpay-webhook.
+  #
+  # PATH PREFIX (2026-07-26): matched under /zimma/api/webhooks/* — see the
+  # PATH PREFIX note at the top of routes/zimma-api.yaml for why (shared-host
+  # collision avoidance on api.faithandgamble.in, same fix already applied to
+  # routes/suwalka-ai-services.yaml's /docs -> /ai-service/docs). proxy-rewrite
+  # regex_uri below strips /zimma before proxying, so zimma-api's in-app
+  # `app.use("/api/webhooks", webhooksRouter())` mount is unchanged.
+  #
+  # WILDCARD, DELIBERATELY (F8): CLAUDE.md's "public paths listed explicitly,
+  # no wildcard" convention is kept here because the varying path segment is
+  # the meeting-platform integrationId, a UUID — it cannot be enumerated into
+  # an explicit list the way health paths can. The risk this trades away:
+  # zimma-api mounts this whole prefix as `app.use("/api/webhooks",
+  # webhooksRouter())` (src/app.ts), so ANY future route added under
+  # webhooksRouter() becomes internet-public the moment it merges in
+  # zimma-api — with no change to this file and no review signal here at
+  # all. New webhook adapters must keep the HMAC + idempotency guarantees
+  # above; this gateway rule cannot enforce that for them.
+  - name: zimma-webhooks
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /zimma/api/webhooks/*
+      methods:
+      - POST
+    backends:
+    - serviceName: zimma-api
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/zimma(.*)"
+        - "$1"
+    - name: limit-req
+      enable: true
+      config:
+        rate: 10
+        burst: 5
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true

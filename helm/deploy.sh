@@ -9,6 +9,43 @@ DRY_RUN=""
 
 NAMESPACE="sfg-gateway"
 
+# Hard-fail on missing gateway secrets BEFORE touching the cluster (N3, PR #33
+# round-2 review). These guards used to sit at step 5/5, after the Zitadel
+# and APISIX helm upgrades had already run — so a merge before
+# ZIMMA_GATEWAY_SECRET exists as a GitHub Secret (this repo's own PR process
+# lists creating it as a merge prerequisite; CI otherwise passes an empty
+# string for a not-yet-created secret) aborted CD with the control plane
+# already upgraded and zero routes reconciled, not a clean no-op. Checking
+# env vars needs no cluster access, so there's no reason not to fail before
+# step 1. Skipped entirely under --dry-run — dry-run needs neither secret.
+if [[ -z "${DRY_RUN}" ]]; then
+  # An unset var makes envsubst emit `X-Gateway-Secret: ` with nothing after
+  # the colon, which YAML parses as a NULL value, not a missing key.
+  # `kubectl apply` validates only against the ApisixRoute CRD's own
+  # (permissive) OpenAPI schema and exits 0 — the CRD doesn't know
+  # proxy-rewrite's plugin-level schema, which DOES reject a null header
+  # value. That rejection happens downstream, when the ingress controller
+  # tries to sync the CRD to the APISIX Admin API, so the observable failure
+  # is the route silently failing to sync (calls to it 404, "route not
+  # found") — not the clean 401 a missing secret would suggest.
+  if [[ -z "${SUWALKA_AI_GATEWAY_SECRET:-}" ]]; then
+    echo "  ERROR: SUWALKA_AI_GATEWAY_SECRET is unset. envsubst would emit a null" >&2
+    echo "         X-Gateway-Secret value; kubectl apply exits 0 regardless, but the" >&2
+    echo "         ingress controller then fails to sync the route to APISIX (proxy-rewrite" >&2
+    echo "         rejects a null header) — calls 404, not a clean 401." >&2
+    echo "         Set SUWALKA_AI_GATEWAY_SECRET before deploying." >&2
+    exit 1
+  fi
+  if [[ -z "${ZIMMA_GATEWAY_SECRET:-}" ]]; then
+    echo "  ERROR: ZIMMA_GATEWAY_SECRET is unset. envsubst would emit a null" >&2
+    echo "         X-Gateway-Secret value; kubectl apply exits 0 regardless, but the" >&2
+    echo "         ingress controller then fails to sync the route to APISIX (proxy-rewrite" >&2
+    echo "         rejects a null header) — the POS SSO handoff 404s, not a clean 401." >&2
+    echo "         Set ZIMMA_GATEWAY_SECRET before deploying." >&2
+    exit 1
+  fi
+fi
+
 echo "===> [1/5] Adding Helm repos"
 # Canonical APISIX chart repo. charts.apiseven.com now 301-redirects here and the redirect
 # can hang/fail on CI runners, so point directly at the GitHub Pages URL.
@@ -79,19 +116,28 @@ fi
 
 echo "===> [5/5] Applying service routes"
 if [[ -z "${DRY_RUN}" ]]; then
-  # routes/suwalka-ai-services.yaml embeds ${SUWALKA_AI_GATEWAY_SECRET} (X-Gateway-Secret
-  # injection, proving requests came from APISIX). Substitute ONLY that var so proxy-rewrite
-  # regex refs like $1 survive; every other route applies verbatim.
-  if [[ -z "${SUWALKA_AI_GATEWAY_SECRET:-}" ]]; then
-    echo "  WARNING: SUWALKA_AI_GATEWAY_SECRET is unset — suwalka-ai-services will 401 every" >&2
-    echo "           browser JWT (X-Gateway-Secret would be blank). Set it before deploying." >&2
-  fi
+  # Two route files embed a deploy-time secret as an envsubst placeholder
+  # (X-Gateway-Secret injection, proving requests came from APISIX):
+  #   routes/suwalka-ai-services.yaml -> ${SUWALKA_AI_GATEWAY_SECRET}
+  #   routes/zimma-api.yaml           -> ${ZIMMA_GATEWAY_SECRET}
+  # Substitute ONLY the file's own var so proxy-rewrite regex refs like $1
+  # survive; every other route applies verbatim. A bare `kubectl apply` of
+  # either file would ship the literal placeholder and 401 every affected
+  # call. Both vars are hard-fail-checked up front, before step 1 — see the
+  # guard at the top of this script (N3, PR #33 round-2 review) for why it
+  # was moved there instead of living here.
   for route in routes/*.yaml; do
-    if [[ "${route}" == *"suwalka-ai-services.yaml" ]]; then
-      envsubst '${SUWALKA_AI_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
-    else
-      kubectl apply -f "${route}"
-    fi
+    case "${route}" in
+      *suwalka-ai-services.yaml)
+        envsubst '${SUWALKA_AI_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
+        ;;
+      *zimma-api.yaml)
+        envsubst '${ZIMMA_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
+        ;;
+      *)
+        kubectl apply -f "${route}"
+        ;;
+    esac
   done
   kubectl -n "${NAMESPACE}" get apisixroutes
 fi

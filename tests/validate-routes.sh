@@ -103,6 +103,65 @@ else:
 PYEOF
 
 echo ""
+echo "===> Checking zimma /zimma/api/auth/ paths stay explicit (F1 static guard)"
+# N2 (PR #33 round-2 review): F1 was a CRITICAL auth bypass — a wildcard on
+# the unprotected zimma-api-app rule shadowed the exact, openid-connect-
+# protected SSO rule for case/trailing-slash variants of
+# /zimma/api/auth/sso. The fix (explicit login/signup paths, no wildcard)
+# lives only in routes/zimma-api.yaml; nothing before this check enforced it
+# structurally. validate-routes.sh only checks CRD schema + duplicate names,
+# and the local Docker smoke stack (docker/apisix/setup-routes.sh +
+# tests/smoke/smoke-test-local.sh) is a HAND-MAINTAINED MIRROR that CLAUDE.md
+# explicitly says does not auto-sync with routes/*.yaml — so restoring the
+# wildcard in routes/zimma-api.yaml ALONE would reintroduce the bypass in
+# production with all four CI jobs still green. This check reads the real
+# production file directly: no rule lacking the openid-connect plugin may
+# claim any path under /zimma/api/auth/ other than the explicit,
+# already-reviewed login/signup forms.
+python3 - routes/zimma-api.yaml <<'PYEOF'
+import sys, yaml
+
+AUTH_PREFIX = "/zimma/api/auth/"
+ALLOWED_UNPROTECTED_PATHS = {
+    "/zimma/api/auth/login",
+    "/zimma/api/auth/login/",
+    "/zimma/api/auth/signup",
+    "/zimma/api/auth/signup/",
+}
+
+violations = []
+for path in sys.argv[1:]:
+    with open(path) as f:
+        docs = list(yaml.safe_load_all(f))
+    for doc in docs:
+        if not doc or doc.get('kind') != 'ApisixRoute':
+            continue
+        for rule in doc.get('spec', {}).get('http', []) or []:
+            plugins = rule.get('plugins', []) or []
+            plugin_names = {p.get('name') for p in plugins if isinstance(p, dict)}
+            if 'openid-connect' in plugin_names:
+                continue  # protected rules may claim whatever they need under this prefix
+            for p in (rule.get('match', {}) or {}).get('paths') or []:
+                if p.startswith(AUTH_PREFIX) and p not in ALLOWED_UNPROTECTED_PATHS:
+                    violations.append(
+                        f"{path}: rule '{rule.get('name', '<unnamed>')}' claims path "
+                        f"'{p}' under {AUTH_PREFIX} WITHOUT the openid-connect plugin, "
+                        f"and '{p}' is not one of the explicit allowed paths "
+                        f"{sorted(ALLOWED_UNPROTECTED_PATHS)} — this is the F1 auth-bypass "
+                        f"shape (PR #33). Either add openid-connect to this rule or remove "
+                        f"the path."
+                    )
+
+if violations:
+    print("  FAIL: F1 static guard — unprotected rule claims a non-explicit auth path:")
+    for v in violations:
+        print(f"    - {v}")
+    sys.exit(1)
+else:
+    print("  PASS: no unprotected rule claims a non-explicit path under /zimma/api/auth/")
+PYEOF
+
+echo ""
 echo "========================================================"
 echo "  Results: ${PASS} passed, ${FAIL} failed"
 [[ "$FAIL" -eq 0 ]] || exit 1

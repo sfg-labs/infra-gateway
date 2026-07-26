@@ -1,0 +1,289 @@
+# NAMESPACE NOTE: this ApisixRoute lives in sfg-labs (set via metadata.namespace) because
+# the APISIX ingress controller (ApisixRoute v2) routes only to Services in the route's OWN
+# namespace — backends[].serviceNamespace is not supported and the installed CRD REJECTS it
+# (docs/adding-a-service.md is stale on this). zimma-api's Service lives in sfg-labs.
+#
+# AUTH NUANCE — Zimma has TWO token worlds on one backend (paths below are the public,
+# /zimma-prefixed gateway paths — see PATH PREFIX; zimma-api's own routes.ts still sees
+# the unprefixed /api/* forms after proxy-rewrite strips /zimma):
+#   1. POST /zimma/api/auth/sso — the ONLY rule with openid-connect. The caller presents
+#      a Zitadel-signed POS access token (RS256); APISIX validates it via JWKS, injects
+#      X-Userinfo, and proxy-rewrite injects X-Gateway-Secret so zimma-api can trust
+#      that X-Userinfo came from APISIX (same pattern as routes/suwalka-ai-services.yaml).
+#      zimma-api NEVER validates Zitadel tokens itself (house rule: auth at the edge).
+#   2. Every other /zimma/api/* path — Zimma's own 7-day JWT, minted by zimma-api at
+#      login/signup/sso. It is NOT a Zitadel token, so openid-connect would 401 it.
+#      Those rules therefore carry NO openid-connect (cors/request-id/limit-req/
+#      response-rewrite only); zimma-api validates its own JWT (tsoa @Security) and
+#      returns the {success:false,error:{...}} envelope on 401.
+#
+# HOST/PATH OWNERSHIP: every rule matches host api.faithandgamble.in ONLY, reusing the
+# host-level Certificate + ApisixTls from routes/suwalka-auth.yaml — no DNS/cert/LB work.
+# routes/suwalka-tasks.yaml also claims /api/tasks/* but only on host
+# api.suwalka-pos.sfg-labs.in, so there is no collision today — but see PATH PREFIX below
+# for why "today" was not good enough.
+#
+# PATH PREFIX (2026-07-26, Ashish) — every match path here is namespaced under /zimma/*
+# (e.g. /api/tasks -> /zimma/api/tasks) and proxy-rewrite's `regex_uri` strips the /zimma
+# prefix before the upstream call, so zimma-api's own routes.ts is completely unaware of
+# it — no in-app change. WHY: zimma-api was claiming generic, unprefixed paths
+# (/api/tasks, /api/members, /api/meetings, /api/policies, /api/proposals, /api/pulse,
+# /api/score/*, /api/standup/*, /api/admin/sync, /api/auth/*, /api/webhooks/*) on
+# api.faithandgamble.in, a HOST SHARED with suwalka-auth, org-hr-payroll, ai-services and
+# notification. /api/tasks specifically already collides in kind (not host, yet) with
+# suwalka-tasks's /api/tasks/* on api.suwalka-pos.sfg-labs.in — the day that service
+# migrates to this shared host (already the direction of travel for the estate), the
+# collision becomes unresolvable without an on-call path migration. This is the same
+# class of bug already fixed once on this host: routes/suwalka-ai-services.yaml's bare
+# /docs collided with other services' Swagger UIs and was moved under /ai-service/* with
+# an identical proxy-rewrite regex_uri strip (see that file's PATH PREFIX note) — copy
+# that precedent here rather than wait for zimma's collision to become live. New public
+# base URL: https://api.faithandgamble.in/zimma — zimma-web's NEXT_PUBLIC_API_URL must
+# be updated to match (see PR body).
+#
+# SECRET SUBSTITUTION: ${ZIMMA_GATEWAY_SECRET} is substituted at deploy time by envsubst
+# in helm/deploy.sh (from the ZIMMA_GATEWAY_SECRET GitHub Secret). A bare `kubectl apply`
+# of this file ships the literal placeholder verbatim and zimma-api will 401 every SSO
+# attempt. Its value MUST equal zimma-api's GATEWAY_SHARED_SECRET (Secret zimma-api-secrets).
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: zimma-api
+  namespace: sfg-labs
+  labels:
+    sfg-project: zimma
+    sfg-auth: mixed
+  annotations:
+    sfg-labs.in/description: "Zimma — meetings to accountable tasks; task-manager API"
+    sfg-labs.in/team: "zimma"
+    sfg-labs.in/upstream: "zimma-api:3001"
+spec:
+  ingressClassName: apisix
+  http:
+  # --- POS SSO handoff: the ONLY openid-connect rule -------------------------
+  # This exact path wins over the general zimma-api-app rule below because
+  # APISIX resolves exact match.paths through a hash-map lookup that is
+  # checked BEFORE prefix/wildcard rules — NOT because of `priority` (that
+  # was the original claim here and it was wrong). `priority` only breaks
+  # ties between rules registered at the SAME path key (e.g. two exact rules
+  # both matching /zimma/api/auth/sso); it plays no part in exact-vs-wildcard
+  # resolution, so it is not what makes this rule win. Kept below for
+  # genuine future ties, not because it is load-bearing for this match.
+  # Only POST (+ preflight OPTIONS, answered by cors before auth): a GET to
+  # /zimma/api/auth/sso matches NO rule at all — the app rule below only
+  # lists /zimma/api/auth/login and /zimma/api/auth/signup, not sso — so it
+  # 404s AT THE GATEWAY and never reaches zimma-api. (A prior version of this
+  # comment said it "falls through to zimma-api-app and 404s in-app
+  # harmlessly" — that was true only while the app rule still wildcarded
+  # /api/auth/*; it's been stale since the F1 fix removed that wildcard.)
+  #
+  # CRITICAL (F1, fixed): zimma-api-app used to carry a wildcard
+  # `/api/auth/*` for "everything that isn't SSO". APISIX's exact-path hash
+  # lookup is case-sensitive and does not normalize trailing slashes, while
+  # zimma-api's Express 5 app runs with `strict routing` and `case sensitive
+  # routing` both OFF (default). So `POST /zimma/api/auth/sso/` and
+  # `POST /zimma/api/auth/SSO` both MISSED this exact rule, fell through to
+  # the `/api/auth/*` wildcard on zimma-api-app (no openid-connect), and
+  # would have reached the SSO handler with NO JWKS validation and an
+  # attacker-supplied X-Userinfo — a full auth bypass. Same class of bug
+  # already documented for /auth/password/change in routes/suwalka-auth.yaml
+  # (~line 325): APISIX paths are exact/no-normalization, Express is not, and
+  # a wildcard on one side papering over an exact rule on the other is the
+  # trap. Fix: zimma-api-app now lists the auth app-paths explicitly (login,
+  # signup — the only two that exist in zimma-api's src/routes.ts) instead of
+  # wildcarding `/api/auth/*`, and this rule additionally matches
+  # /zimma/api/auth/sso/ so the trailing-slash form stays protected too.
+  # (Paths below carry the /zimma prefix — see PATH PREFIX note at the top of
+  # this file; the F1 shadowing logic is unchanged by the prefix, only the
+  # literal strings moved.)
+  # FOLLOW-UP (not this repo): zimma-api should also set Express
+  # `case sensitive routing` + `strict routing` to `true` so case/slash
+  # variants 404 in-app instead of silently aliasing — defense in depth once
+  # the gateway-side hole above is closed.
+  - name: zimma-api-sso
+    priority: 10
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /zimma/api/auth/sso
+      - /zimma/api/auth/sso/
+      methods:
+      - POST
+      - OPTIONS
+    backends:
+    - serviceName: zimma-api
+      servicePort: 3001
+      weight: 100
+    plugins:
+    # A plugin can only appear once per rule, so the /zimma prefix strip is
+    # added to THIS SAME proxy-rewrite block (regex_uri) rather than as a
+    # second proxy-rewrite entry. After openid-connect validates the POS JWT
+    # and sets X-Userinfo, inject X-Gateway-Secret — zimma-api rejects
+    # X-Userinfo without it, killing off-gateway forgery against the
+    # ClusterIP. envsubst'd — see header note; deploy.sh passes an explicit
+    # var list to envsubst so it substitutes ONLY ${ZIMMA_GATEWAY_SECRET},
+    # leaving the regex_uri $1 backreference intact. regex_uri strips
+    # `/zimma` off the front of whatever matched (exact /zimma/api/auth/sso
+    # or /zimma/api/auth/sso/) before proxying to zimma-api, same pattern as
+    # routes/suwalka-ai-services.yaml's /ai-service/* prefix.
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/zimma(.*)"
+        - "$1"
+        headers:
+          set:
+            X-Gateway-Secret: ${ZIMMA_GATEWAY_SECRET}
+    # cors runs at a higher APISIX plugin priority than openid-connect, so it
+    # answers the credential-less preflight itself. Origins are byte-exact
+    # (scheme + host + port; no trailing slash):
+    #   http://localhost:3000            zimma-web `next dev` (package.json has no -p → 3000)
+    #   http://localhost:3010            zimma-web run beside admin-web (`next dev -p 3010`)
+    #   https://zimma.faithandgamble.in  production custom domain (CF Pages, Task 9)
+    #   https://zimma-web.pages.dev      CF Pages default domain for the zimma-web project
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,http://localhost:3010,https://zimma.faithandgamble.in,https://zimma-web.pages.dev"
+        allow_methods: "GET,POST,PATCH,DELETE,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 10
+        burst: 5
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: zimma
+
+  # --- Everything else: Zimma's own JWT, validated in-app — NO openid-connect ---
+  # Bare paths are listed alongside wildcards because APISIX's /prefix/* does NOT
+  # match /prefix itself, and list/create endpoints live on the bare path
+  # (GET/POST /zimma/api/tasks, GET /zimma/api/pulse, ...).
+  #
+  # AUTH PATHS ARE EXPLICIT, NOT A WILDCARD (F1 fix): this used to be
+  # `/api/auth/*`, which shadowed the zimma-api-sso exact rule for
+  # case/trailing-slash variants of /api/auth/sso (see the CRITICAL note on
+  # that rule above) and, being a wildcard, would silently absorb any future
+  # /api/auth/* endpoint zimma-api adds — including a real SSO handler if one
+  # is ever added under a name other than /sso — with no gateway-side review
+  # signal. Listed here only the two endpoints that exist today, verified
+  # against zimma-api's src/routes.ts: signup, login (both bare + trailing
+  # slash, matching the Express strict-routing-OFF behavior noted above).
+  # Adding a new /api/auth/<x> endpoint in zimma-api REQUIRES a matching
+  # addition here (as /zimma/api/auth/<x>) — it will 404 at the gateway
+  # otherwise, by design.
+  #
+  # All paths carry the /zimma prefix (see PATH PREFIX note at the top of
+  # this file); proxy-rewrite's regex_uri below strips it before proxying,
+  # so the list of upstream paths zimma-api actually receives is byte-
+  # identical to what it was before the prefix was added.
+  - name: zimma-api-app
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /zimma/api/auth/login
+      - /zimma/api/auth/login/
+      - /zimma/api/auth/signup
+      - /zimma/api/auth/signup/
+      - /zimma/api/tasks
+      - /zimma/api/tasks/*
+      - /zimma/api/score/*
+      - /zimma/api/standup/*
+      - /zimma/api/meetings
+      - /zimma/api/meetings/*
+      - /zimma/api/pulse
+      - /zimma/api/pulse/*
+      - /zimma/api/members
+      - /zimma/api/members/*
+      - /zimma/api/policies
+      - /zimma/api/policies/*
+      - /zimma/api/proposals
+      - /zimma/api/proposals/*
+      - /zimma/api/admin/sync
+      methods:
+      - GET
+      - POST
+      - PATCH
+      - DELETE
+      - OPTIONS
+    backends:
+    - serviceName: zimma-api
+      servicePort: 3001
+      weight: 100
+    plugins:
+    # Strips the /zimma prefix before the upstream call — same regex_uri
+    # pattern as the zimma-api-sso rule above and routes/suwalka-ai-services.yaml's
+    # /ai-service/* prefix. Handles both bare (/zimma/api/tasks -> /api/tasks)
+    # and nested (/zimma/api/tasks/123 -> /api/tasks/123) forms identically:
+    # `(.*)` captures everything after the literal `/zimma`, including the
+    # empty string for a bare match, and $1 replays it unprefixed.
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/zimma(.*)"
+        - "$1"
+    # Gateway CORS owns browser CORS for these paths — zimma-api's app-level
+    # cors() middleware is disabled when GATEWAY_MODE=1 (see the zimma-api chart
+    # configmap). Same byte-exact origin list as the SSO rule above.
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,http://localhost:3010,https://zimma.faithandgamble.in,https://zimma-web.pages.dev"
+        allow_methods: "GET,POST,PATCH,DELETE,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: zimma
