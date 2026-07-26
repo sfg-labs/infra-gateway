@@ -40,7 +40,14 @@ spec:
   ingressClassName: apisix
   http:
   # --- POS SSO handoff: the ONLY openid-connect rule -------------------------
-  # priority 10 so this exact path wins over the general /api/auth/* rule below.
+  # This exact path wins over the general zimma-api-app rule below because
+  # APISIX resolves exact match.paths through a hash-map lookup that is
+  # checked BEFORE prefix/wildcard rules — NOT because of `priority` (that
+  # was the original claim here and it was wrong). `priority` only breaks
+  # ties between rules registered at the SAME path key (e.g. two exact rules
+  # both matching /api/auth/sso); it plays no part in exact-vs-wildcard
+  # resolution, so it is not what makes this rule win. Kept below for
+  # genuine future ties, not because it is load-bearing for this match.
   # Only POST (+ preflight OPTIONS, answered by cors before auth): a GET
   # /api/auth/sso falls through to zimma-api-app and 404s in-app harmlessly.
   #
