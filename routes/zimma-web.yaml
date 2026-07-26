@@ -1,0 +1,80 @@
+# Public frontend host for zimma-web (Next.js 15 App Router, standalone output) —
+# meetings to accountable tasks with SLA escalation. Two hosts on one Service so
+# prod needs no second PR the day zimma goes GA:
+#   zimma-dev.faithandgamble.in  dev/staging (live today)
+#   zimma.faithandgamble.in      production (DNS already points here too — see the
+#                                 zimma-api CORS comment, which already allow-lists
+#                                 both origins)
+# Shares the existing APISIX gateway LoadBalancer IP (168.144.48.171) — no new IP/LB.
+# TLS: neither host is covered by an existing Certificate (api.faithandgamble.in and
+# suwalka*.faithandgamble.in are separate hostnames with their own certs) — see the
+# companion routes/zimma-web-tls.yaml (Certificate + ApisixTls for both hosts, kept in
+# its own file so THIS file passes tests/validate-routes.sh's ApisixRoute-only schema
+# check cleanly — see that file's header for why).
+#
+# This is a browser-facing Next.js app, so the route is PUBLIC — the openid-connect
+# plugin is deliberately OMITTED, same as admin-web / admin-web-dev. Auth (if any) is
+# the caller's zimma-api JWT sent directly to api.faithandgamble.in/zimma/*; the
+# gateway must not gate the HTML/asset requests here.
+#
+# NAMESPACE NOTE: this lives in sfg-labs because the APISIX ingress controller
+# (ApisixRoute v2) routes only to Services in the route's OWN namespace — there is no
+# backends[].serviceNamespace. The zimma-web Service (helm/zimma-web) is in sfg-labs.
+#
+# METHODS: GET/HEAD/OPTIONS only — zimma-web is a REST-only frontend (no DB, no
+# server actions posting back to itself); all writes go straight to zimma-api on
+# api.faithandgamble.in/zimma/*, which is where those methods are handled.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: zimma-web
+  namespace: sfg-labs
+  labels:
+    sfg-project: zimma
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Zimma web client — meetings to accountable tasks (frontend)"
+    sfg-labs.in/team: "zimma"
+    sfg-labs.in/upstream: "zimma-web:3000"
+spec:
+  ingressClassName: apisix
+  http:
+    - name: zimma-web
+      match:
+        hosts:
+          - zimma-dev.faithandgamble.in
+          - zimma.faithandgamble.in
+        paths:
+          - /*
+        methods:
+          - GET
+          - HEAD
+          - OPTIONS
+      backends:
+        - serviceName: zimma-web
+          servicePort: 3000
+          weight: 100
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            # A single page load fetches many JS/CSS chunks at once — keep this
+            # generous or the browser gets 429s and the app shows a blank screen.
+            # Same rate/burst as admin-web's identically-shaped frontend route.
+            rate: 200
+            burst: 200
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: zimma
