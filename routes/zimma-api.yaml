@@ -69,8 +69,13 @@ spec:
   # both matching /zimma/api/auth/sso); it plays no part in exact-vs-wildcard
   # resolution, so it is not what makes this rule win. Kept below for
   # genuine future ties, not because it is load-bearing for this match.
-  # Only POST (+ preflight OPTIONS, answered by cors before auth): a GET
-  # /zimma/api/auth/sso falls through to zimma-api-app and 404s in-app harmlessly.
+  # Only POST (+ preflight OPTIONS, answered by cors before auth): a GET to
+  # /zimma/api/auth/sso matches NO rule at all — the app rule below only
+  # lists /zimma/api/auth/login and /zimma/api/auth/signup, not sso — so it
+  # 404s AT THE GATEWAY and never reaches zimma-api. (A prior version of this
+  # comment said it "falls through to zimma-api-app and 404s in-app
+  # harmlessly" — that was true only while the app rule still wildcarded
+  # /api/auth/*; it's been stale since the F1 fix removed that wildcard.)
   #
   # CRITICAL (F1, fixed): zimma-api-app used to carry a wildcard
   # `/api/auth/*` for "everything that isn't SSO". APISIX's exact-path hash
