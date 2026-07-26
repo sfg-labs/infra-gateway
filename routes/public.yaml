@@ -224,30 +224,17 @@ spec:
         - "^/org/swagger(.*)"
         - "/docs$1"
 
-  # Zimma health/readiness — GET only, no auth (probes and smoke checks carry no
-  # credential). NOTE: /health and /ready are GENERIC paths on the shared
-  # api.faithandgamble.in host and zimma-api is the first claimer — a future
-  # service on this host must pick distinct paths (compare the /docs collision
-  # note in routes/suwalka-ai-services.yaml).
-  - name: zimma-health
-    match:
-      hosts:
-      - api.faithandgamble.in
-      paths:
-      - /health
-      - /ready
-      methods:
-      - GET
-    backends:
-    - serviceName: zimma-api
-      servicePort: 3001
-      weight: 100
-    plugins:
-    - name: request-id
-      enable: true
-      config:
-        header_name: X-Request-Id
-        include_in_response: true
+  # Zimma health/readiness rules were REMOVED here (F6, PR #33 review). K8s
+  # liveness/readiness probes hit the pod's ClusterIP directly, never the
+  # gateway, so a gateway route for /health or /ready adds no value to the
+  # probe path itself. Worse, a bare `/health` on this SHARED host
+  # (api.faithandgamble.in) was a land-grab: org-hr and ai-services both use
+  # `/healthz`/`/readyz` on their hosts precisely to avoid colliding on the
+  # generic name, and this rule made tests/smoke/smoke-test.sh report the
+  # GATEWAY healthy based on one unrelated pod (zimma-api) rather than the
+  # thing it's meant to be checking. If a caller genuinely needs to check
+  # zimma-api's health through the gateway, use a distinct explicit path
+  # (e.g. `/zimma/health`), not `/health`.
 
   # Zimma meeting-platform webhooks (meeting-ended payloads etc.) — POST only,
   # no JWT (the caller is a bot platform, not a browser). zimma-api MUST verify
