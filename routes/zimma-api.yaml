@@ -181,10 +181,11 @@ spec:
     #   http://localhost:3010            zimma-web run beside admin-web (`next dev -p 3010`)
     #   https://zimma.faithandgamble.in  production custom domain (CF Pages, Task 9)
     #   https://zimma-web.pages.dev      CF Pages default domain for the zimma-web project
+    #   https://zimma-dev.faithandgamble.in  dev custom domain, same APISIX LB (DNS added 2026-07-26)
     - name: cors
       enable: true
       config:
-        allow_origins: "http://localhost:3000,http://localhost:3010,https://zimma.faithandgamble.in,https://zimma-web.pages.dev"
+        allow_origins: "http://localhost:3000,http://localhost:3010,https://zimma.faithandgamble.in,https://zimma-web.pages.dev,https://zimma-dev.faithandgamble.in"
         allow_methods: "GET,POST,PATCH,DELETE,OPTIONS"
         allow_headers: "*"
         allow_credential: false
@@ -326,7 +327,7 @@ spec:
     - name: cors
       enable: true
       config:
-        allow_origins: "http://localhost:3000,http://localhost:3010,https://zimma.faithandgamble.in,https://zimma-web.pages.dev"
+        allow_origins: "http://localhost:3000,http://localhost:3010,https://zimma.faithandgamble.in,https://zimma-web.pages.dev,https://zimma-dev.faithandgamble.in"
         allow_methods: "GET,POST,PATCH,DELETE,OPTIONS"
         allow_headers: "*"
         allow_credential: false
