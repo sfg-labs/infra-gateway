@@ -24,25 +24,41 @@ http() {
   curl -sf -o /dev/null -w "%{http_code}" --max-time 10 "$@" 2>/dev/null || echo "000"
 }
 
-echo "===> [1/4] Health check (public, no auth needed, expect 200)"
+echo "===> [1/5] Health check (public, no auth needed, expect 200)"
 check "NMA health"     "200" "$(http -H 'Host: api.nma.localhost'     "${GATEWAY}/health")"
 check "Baithak health" "200" "$(http -H 'Host: api.baithak.localhost' "${GATEWAY}/health")"
 check "CMS health"     "200" "$(http -H 'Host: api.cms.localhost'     "${GATEWAY}/health")"
 
 echo ""
-echo "===> [2/4] Protected routes without token (expect 401)"
+echo "===> [2/5] Protected routes without token (expect 401)"
 check "NMA /api/ — no token"     "401" "$(http -H 'Host: api.nma.localhost'     "${GATEWAY}/api/anything")"
 check "Baithak /api/ — no token" "401" "$(http -H 'Host: api.baithak.localhost' "${GATEWAY}/api/anything")"
 check "CMS /api/ — no token"     "401" "$(http -H 'Host: api.cms.localhost'     "${GATEWAY}/api/anything")"
 
 echo ""
-echo "===> [3/4] Protected routes with fake token (expect 401)"
+echo "===> [3/5] Protected routes with fake token (expect 401)"
 FAKE="Bearer eyJhbGciOiJSUzI1NiJ9.fake.sig"
 check "NMA — fake token"     "401" "$(http -H 'Host: api.nma.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/api/anything")"
 check "Baithak — fake token" "401" "$(http -H 'Host: api.baithak.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/api/anything")"
 
 echo ""
-echo "===> [4/4] Zitadel OIDC discovery (expect 200 + valid JSON)"
+echo "===> [4/5] Zimma — SSO-only openid-connect; F1 regression guard"
+check "Zimma SSO — no token"   "401" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/sso")"
+check "Zimma SSO — fake token" "401" "$(http -X POST -H 'Host: api.zimma.localhost' -H "Authorization: ${FAKE}" "${GATEWAY}/api/auth/sso")"
+# F1 (CRITICAL, fixed in routes/zimma-api.yaml): a wildcard /api/auth/* app
+# rule used to shadow the exact SSO rule for case/trailing-slash variants,
+# letting them reach zimma-api unauthenticated with attacker-supplied
+# X-Userinfo. The fix replaces that wildcard with explicit login/signup
+# paths, so a case-variant like /api/auth/SSO now matches no route at all —
+# APISIX 404s it before it is ever proxied to the (mock) backend. This is
+# the regression guard for that fix; see docker/apisix/setup-routes.sh for
+# the local route mirror it depends on.
+check "Zimma SSO case-variant — no route, not proxied unauth" "404" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/SSO")"
+check "Zimma login — open at gateway, in-app JWT"  "200" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/login")"
+check "Zimma signup — open at gateway, in-app JWT" "200" "$(http -X POST -H 'Host: api.zimma.localhost' "${GATEWAY}/api/auth/signup")"
+
+echo ""
+echo "===> [5/5] Zitadel OIDC discovery (expect 200 + valid JSON)"
 DISC_STATUS="$(http "${ZITADEL}/.well-known/openid-configuration")"
 check "OIDC discovery HTTP 200" "200" "${DISC_STATUS}"
 
