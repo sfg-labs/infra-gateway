@@ -79,19 +79,33 @@ fi
 
 echo "===> [5/5] Applying service routes"
 if [[ -z "${DRY_RUN}" ]]; then
-  # routes/suwalka-ai-services.yaml embeds ${SUWALKA_AI_GATEWAY_SECRET} (X-Gateway-Secret
-  # injection, proving requests came from APISIX). Substitute ONLY that var so proxy-rewrite
-  # regex refs like $1 survive; every other route applies verbatim.
+  # Two route files embed a deploy-time secret as an envsubst placeholder
+  # (X-Gateway-Secret injection, proving requests came from APISIX):
+  #   routes/suwalka-ai-services.yaml -> ${SUWALKA_AI_GATEWAY_SECRET}
+  #   routes/zimma-api.yaml           -> ${ZIMMA_GATEWAY_SECRET}
+  # Substitute ONLY the file's own var so proxy-rewrite regex refs like $1
+  # survive; every other route applies verbatim. A bare `kubectl apply` of
+  # either file would ship the literal placeholder and 401 every affected call.
   if [[ -z "${SUWALKA_AI_GATEWAY_SECRET:-}" ]]; then
     echo "  WARNING: SUWALKA_AI_GATEWAY_SECRET is unset — suwalka-ai-services will 401 every" >&2
     echo "           browser JWT (X-Gateway-Secret would be blank). Set it before deploying." >&2
   fi
+  if [[ -z "${ZIMMA_GATEWAY_SECRET:-}" ]]; then
+    echo "  WARNING: ZIMMA_GATEWAY_SECRET is unset — zimma-api will 401 every POS SSO" >&2
+    echo "           handoff (X-Gateway-Secret would be blank). Set it before deploying." >&2
+  fi
   for route in routes/*.yaml; do
-    if [[ "${route}" == *"suwalka-ai-services.yaml" ]]; then
-      envsubst '${SUWALKA_AI_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
-    else
-      kubectl apply -f "${route}"
-    fi
+    case "${route}" in
+      *suwalka-ai-services.yaml)
+        envsubst '${SUWALKA_AI_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
+        ;;
+      *zimma-api.yaml)
+        envsubst '${ZIMMA_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
+        ;;
+      *)
+        kubectl apply -f "${route}"
+        ;;
+    esac
   done
   kubectl -n "${NAMESPACE}" get apisixroutes
 fi
