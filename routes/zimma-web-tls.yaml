@@ -1,0 +1,46 @@
+# TLS for zimma-web's two hosts — split into its own file (rather than co-located in
+# routes/zimma-web.yaml, which is the repo's usual pattern — see admin-web.yaml,
+# admin-web-dev.yaml, suwalka-auth.yaml) so that routes/zimma-web.yaml itself passes
+# tests/validate-routes.sh cleanly. validate-routes.sh's schema check assumes every doc
+# in routes/*.yaml is an ApisixRoute, so any file mixing in a cert-manager Certificate /
+# ApisixTls doc reports FAIL on those docs — a known, accepted limitation of the script
+# (see the 3 pre-existing instances above), not a real problem with the YAML. Keeping
+# that noise out of zimma-web.yaml rather than adding a 4th instance to that specific
+# file; this file inherits the same known false-positive instead.
+#
+# Neither host is covered by an existing Certificate: api.faithandgamble.in and
+# suwalka*.faithandgamble.in are separate hostnames with their own certs (routes/
+# suwalka-auth.yaml, routes/admin-web.yaml, routes/admin-web-dev.yaml).
+#
+# Issuer: letsencrypt-prod (k8s/cert-issuer.yaml) — HTTP-01 challenge solved through
+# APISIX, same as every other host in this repo.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: zimma-faithandgamble-tls
+  namespace: sfg-labs
+spec:
+  secretName: zimma-faithandgamble-tls
+  # NOTE: zimma.faithandgamble.in is deliberately NOT requested yet — it has no DNS
+  # record, and cert-manager's HTTP-01 challenge fails the ENTIRE Certificate if any
+  # listed name doesn't resolve to this gateway. Add it here once the A record for
+  # zimma -> 168.144.48.171 exists; the ApisixRoute already serves both hosts.
+  dnsNames:
+    - zimma-dev.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: zimma-faithandgamble
+  namespace: sfg-labs
+spec:
+  ingressClassName: apisix
+  hosts:
+    - zimma-dev.faithandgamble.in
+    - zimma.faithandgamble.in
+  secret:
+    name: zimma-faithandgamble-tls
+    namespace: sfg-labs
