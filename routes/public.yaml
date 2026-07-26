@@ -241,6 +241,17 @@ spec:
   # the HMAC signature over the raw body and dedupe on (source, external_id) —
   # both enforced in-app (webhooks.controller + house rule 6 in zimma-api
   # CLAUDE.md). Strict rate limit, same posture as baithak-razorpay-webhook.
+  #
+  # WILDCARD, DELIBERATELY (F8): CLAUDE.md's "public paths listed explicitly,
+  # no wildcard" convention is kept here because the varying path segment is
+  # the meeting-platform integrationId, a UUID — it cannot be enumerated into
+  # an explicit list the way health paths can. The risk this trades away:
+  # zimma-api mounts this whole prefix as `app.use("/api/webhooks",
+  # webhooksRouter())` (src/app.ts), so ANY future route added under
+  # webhooksRouter() becomes internet-public the moment it merges in
+  # zimma-api — with no change to this file and no review signal here at
+  # all. New webhook adapters must keep the HMAC + idempotency guarantees
+  # above; this gateway rule cannot enforce that for them.
   - name: zimma-webhooks
     match:
       hosts:
