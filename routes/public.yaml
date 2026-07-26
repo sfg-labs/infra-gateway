@@ -223,3 +223,60 @@ spec:
         regex_uri:
         - "^/org/swagger(.*)"
         - "/docs$1"
+
+  # Zimma health/readiness — GET only, no auth (probes and smoke checks carry no
+  # credential). NOTE: /health and /ready are GENERIC paths on the shared
+  # api.faithandgamble.in host and zimma-api is the first claimer — a future
+  # service on this host must pick distinct paths (compare the /docs collision
+  # note in routes/suwalka-ai-services.yaml).
+  - name: zimma-health
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /health
+      - /ready
+      methods:
+      - GET
+    backends:
+    - serviceName: zimma-api
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  # Zimma meeting-platform webhooks (meeting-ended payloads etc.) — POST only,
+  # no JWT (the caller is a bot platform, not a browser). zimma-api MUST verify
+  # the HMAC signature over the raw body and dedupe on (source, external_id) —
+  # both enforced in-app (webhooks.controller + house rule 6 in zimma-api
+  # CLAUDE.md). Strict rate limit, same posture as baithak-razorpay-webhook.
+  - name: zimma-webhooks
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /api/webhooks/*
+      methods:
+      - POST
+    backends:
+    - serviceName: zimma-api
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: limit-req
+      enable: true
+      config:
+        rate: 10
+        burst: 5
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
