@@ -42,16 +42,30 @@ create_upstream() {
 }
 
 create_route() {
+  # client_ip_header (7th, optional arg, default "false"): mirrors
+  # routes/zimma-api.yaml's X-Client-IP proxy-rewrite injection (see that
+  # file for the full why). This is a shared helper used by NMA/Baithak/CMS/
+  # Suwalka-HR/Zitadel-auth too, so the injection is opt-in per call rather
+  # than unconditional — only the zimma-tasks/zimma-members/zimma-webhooks
+  # call sites below pass "true"; every other caller is unaffected.
   local id="$1" name="$2" host="$3" prefix="$4" upstream_id="$5" protected="$6"
+  local client_ip_header="${7:-false}"
   echo "--> Route: ${name} (${host}${prefix}*) → upstream/${upstream_id} [auth=${protected}]"
 
+  local client_ip_plugin=""
+  if [[ "${client_ip_header}" == "true" ]]; then
+    client_ip_plugin="\"proxy-rewrite\": {\"headers\": {\"set\": {\"X-Client-IP\": \"\$remote_addr\"}}},"
+  fi
+
   local plugins="{
+    ${client_ip_plugin}
     \"request-id\": {\"header_name\": \"X-Request-Id\", \"include_in_response\": true},
     \"response-rewrite\": {\"headers\": {\"set\": {\"X-Gateway\": \"sfg-labs\"}}}
   }"
 
   if [[ "${protected}" == "true" ]]; then
     plugins="{
+      ${client_ip_plugin}
       \"openid-connect\": {
         \"discovery\": \"${ZITADEL_URL}/.well-known/openid-configuration\",
         \"client_id\": \"${OIDC_CLIENT_ID}\",
@@ -106,6 +120,16 @@ create_exact_route() {
   # protected=false routes also proxy-rewrite to a real httpbin endpoint
   # (mirrors create_health_route's /get trick) so the smoke test can assert
   # a genuine 200 from upstream, not just "didn't 401".
+  #
+  # X-Client-IP mirror (2026-07-26): routes/zimma-api.yaml now injects
+  # X-Client-IP: $remote_addr via proxy-rewrite on both its rules (see that
+  # file's comment for the full why — zimma-api's rate limiter trusts this
+  # header instead of a rotating APISIX pod IP). Mirrored here on EVERY
+  # call of this helper (all callers are zimma-only — see the call sites
+  # below) so the local smoke stack exercises the same header-injection
+  # shape. The protected (SSO) branch does not mirror X-Gateway-Secret —
+  # that gap pre-dates this change (setup-routes.sh has never injected it,
+  # only the real routes/zimma-api.yaml does) and is not this change's scope.
   local id="$1" name="$2" host="$3" uri="$4" upstream_id="$5" protected="$6"
   echo "--> Route: ${name} (${host}${uri}) [exact] → upstream/${upstream_id} [auth=${protected}]"
 
@@ -122,13 +146,14 @@ create_exact_route() {
         \"userinfo_header_name\": \"X-Userinfo\",
         \"timeout\": 5
       },
+      \"proxy-rewrite\": {\"headers\": {\"set\": {\"X-Client-IP\": \"\$remote_addr\"}}},
       \"request-id\": {\"header_name\": \"X-Request-Id\", \"include_in_response\": true},
       \"limit-req\": {\"rate\": 10, \"burst\": 5, \"rejected_code\": 429, \"key_type\": \"var\", \"key\": \"remote_addr\"},
       \"response-rewrite\": {\"headers\": {\"set\": {\"X-Gateway\": \"sfg-labs\"}}}
     }"
   else
     plugins="{
-      \"proxy-rewrite\": {\"uri\": \"/post\"},
+      \"proxy-rewrite\": {\"uri\": \"/post\", \"headers\": {\"set\": {\"X-Client-IP\": \"\$remote_addr\"}}},
       \"request-id\": {\"header_name\": \"X-Request-Id\", \"include_in_response\": true},
       \"response-rewrite\": {\"headers\": {\"set\": {\"X-Gateway\": \"sfg-labs\"}}}
     }"
@@ -211,14 +236,16 @@ create_exact_route "74" "zimma-signup"       "api.zimma.localhost" "/zimma/api/a
 create_exact_route "75" "zimma-signup-slash" "api.zimma.localhost" "/zimma/api/auth/signup/"  "6" "false"
 # Non-auth resource paths — open at the gateway, zimma-api validates its own
 # 7-day JWT in-app (see the sfg-auth: mixed note in CLAUDE.md).
-create_route "76" "zimma-tasks"    "api.zimma.localhost" "/zimma/api/tasks"    "6" "false"
-create_route "77" "zimma-members"  "api.zimma.localhost" "/zimma/api/members" "6" "false"
+# client_ip_header=true on all three: production's zimma-api-app rule
+# (routes/zimma-api.yaml) injects X-Client-IP on this exact traffic shape.
+create_route "76" "zimma-tasks"    "api.zimma.localhost" "/zimma/api/tasks"    "6" "false" "true"
+create_route "77" "zimma-members"  "api.zimma.localhost" "/zimma/api/members" "6" "false" "true"
 # Public webhooks — no auth at all, same posture as routes/public.yaml's
 # zimma-webhooks (HMAC verified in-app). No /health or /ready mirror here:
 # F6 removed those from the production public.yaml (probes hit the pod
 # directly; a gateway health route added no value), so there's nothing to
 # mirror.
-create_route "78" "zimma-webhooks" "api.zimma.localhost" "/zimma/api/webhooks" "6" "false"
+create_route "78" "zimma-webhooks" "api.zimma.localhost" "/zimma/api/webhooks" "6" "false" "true"
 
 echo ""
 echo "========================================================"
