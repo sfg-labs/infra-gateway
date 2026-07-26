@@ -46,16 +46,84 @@ if [[ -z "${DRY_RUN}" ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# Loudly print the kubectl context/cluster this run targets, BEFORE any write
+# — dry-run or real. The incident this guards against: a dry-run was run with
+# kubeconfig pointed at the wrong cluster (CMS Bangalore instead of Suwalka
+# POS), and an ungated `kubectl apply -f k8s/namespaces.yaml` (see step 2
+# below) created 3 real namespaces there. This banner is the tripwire — a
+# human staring at the wrong context/server name before anything runs.
+# ---------------------------------------------------------------------------
+CURRENT_CONTEXT="$(kubectl config current-context 2>/dev/null || echo '<no context set>')"
+CURRENT_SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || echo '<unknown>')"
+echo ">>> TARGET CONTEXT: ${CURRENT_CONTEXT}  SERVER: ${CURRENT_SERVER}"
+if [[ -n "${DRY_RUN}" ]]; then
+  echo ">>> --dry-run: this run performs ZERO writes to the cluster above, or any cluster."
+fi
+
+# ---------------------------------------------------------------------------
+# Real-deploy confirmation gate. Skipped entirely under --dry-run (which is
+# already a no-op against every cluster-mutating command below). For a REAL
+# deploy, require ONE of:
+#   - CONFIRM_CONTEXT=<expected-context-name> matching kubectl's current
+#     context exactly — fails loudly on any mismatch. Non-interactive path,
+#     e.g. a human deploying from their laptop.
+#   - An interactive y/N-style prompt, when stdin is a TTY and CONFIRM_CONTEXT
+#     is unset.
+#   - The CD workflow's own workflow_dispatch "confirm: deploy" input IS
+#     already a human confirmation gate (see .github/workflows/cd.yaml), and
+#     that runner writes a fresh kubeconfig from the DOKS_KUBECONFIG secret
+#     every run rather than relying on a possibly-stale local context — so a
+#     non-interactive shell with CI=true (set automatically by GitHub
+#     Actions) auto-passes without hanging.
+#   - Anything else (non-interactive, no CONFIRM_CONTEXT, not CI) fails
+#     loudly rather than silently deploying to whatever context happens to
+#     be current.
+# ---------------------------------------------------------------------------
+if [[ -z "${DRY_RUN}" ]]; then
+  if [[ -n "${CONFIRM_CONTEXT:-}" ]]; then
+    if [[ "${CONFIRM_CONTEXT}" != "${CURRENT_CONTEXT}" ]]; then
+      echo "  ERROR: CONFIRM_CONTEXT='${CONFIRM_CONTEXT}' does not match the current" >&2
+      echo "         kubectl context '${CURRENT_CONTEXT}'. Refusing to deploy — this is" >&2
+      echo "         exactly the misconfiguration that created real namespaces on the" >&2
+      echo "         wrong cluster. Fix your kubeconfig context or CONFIRM_CONTEXT." >&2
+      exit 1
+    fi
+    echo "    CONFIRM_CONTEXT matches current context '${CURRENT_CONTEXT}' — proceeding."
+  elif [[ -t 0 ]]; then
+    read -r -p "  About to deploy REAL changes to context '${CURRENT_CONTEXT}' (${CURRENT_SERVER}). Type 'yes' to continue: " CONFIRM_REPLY
+    if [[ "${CONFIRM_REPLY}" != "yes" ]]; then
+      echo "  Aborted: confirmation not given." >&2
+      exit 1
+    fi
+  elif [[ "${CI:-}" == "true" ]]; then
+    echo "    Non-interactive run with CI=true — the CD workflow's own workflow_dispatch"
+    echo "    confirm input is the human gate for this deploy; proceeding without a"
+    echo "    CONFIRM_CONTEXT match."
+  else
+    echo "  ERROR: refusing to deploy — stdin is not a TTY, CONFIRM_CONTEXT is unset, and" >&2
+    echo "         CI=true is not set. Re-run interactively, or set" >&2
+    echo "         CONFIRM_CONTEXT=<expected-context-name> to confirm the target cluster" >&2
+    echo "         non-interactively." >&2
+    exit 1
+  fi
+fi
+
 echo "===> [1/5] Adding Helm repos"
 # Canonical APISIX chart repo. charts.apiseven.com now 301-redirects here and the redirect
 # can hang/fail on CI runners, so point directly at the GitHub Pages URL.
 # --force-update makes re-adding an existing repo idempotent without masking real errors.
+# Not gated by --dry-run: this only touches the local Helm repo cache, never a cluster.
 helm repo add apisix  https://apache.github.io/apisix-helm-chart --force-update
 helm repo add zitadel https://charts.zitadel.com                 --force-update
 helm repo update
 
 echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs)"
-kubectl apply -f k8s/namespaces.yaml
+if [[ -z "${DRY_RUN}" ]]; then
+  kubectl apply -f k8s/namespaces.yaml
+else
+  echo "    [dry-run] would run: kubectl apply -f k8s/namespaces.yaml"
+fi
 
 echo "===> [2b/5] Installing cert-manager (for Let's Encrypt TLS)"
 # Installs CRDs + controller + webhook. Idempotent. The ClusterIssuer/Certificate are applied
@@ -67,6 +135,9 @@ if [[ -z "${DRY_RUN}" ]]; then
   kubectl -n cert-manager rollout status deploy/cert-manager --timeout=180s
   kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
   kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=180s
+else
+  echo "    [dry-run] would run: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
+  echo "    [dry-run] would wait on rollout status for cert-manager, cert-manager-webhook, cert-manager-cainjector"
 fi
 
 echo "===> [3/5] Installing Zitadel"
@@ -77,8 +148,12 @@ if [[ -z "${DRY_RUN}" ]]; then
     kubectl -n "${NAMESPACE}" create secret generic zitadel-masterkey \
       --from-literal=masterkey="$(openssl rand -base64 32)"
   fi
+else
+  echo "    [dry-run] would run: kubectl -n ${NAMESPACE} create secret generic zitadel-masterkey ... (only if missing)"
 fi
 
+# `--dry-run` (from ${DRY_RUN} below) is Helm's own client-side dry run — it renders and
+# simulates the release without creating/updating anything in the cluster.
 helm upgrade --install sfg-zitadel zitadel/zitadel \
   --namespace "${NAMESPACE}" \
   --values helm/zitadel/values.yaml \
@@ -95,8 +170,12 @@ if [[ -z "${DRY_RUN}" ]]; then
   fi
   APISIX_ADMIN_KEY="$(kubectl -n "${NAMESPACE}" get secret apisix-admin-key \
     -o jsonpath='{.data.key}' | base64 -d)"
+else
+  echo "    [dry-run] would run: kubectl -n ${NAMESPACE} create secret generic apisix-admin-key ... (only if missing)"
+  echo "    [dry-run] would read back the apisix-admin-key secret to wire into the Helm release"
 fi
 
+# `--dry-run` (from ${DRY_RUN} below) is Helm's own client-side dry run — see step 3 note.
 helm upgrade --install sfg-apisix apisix/apisix \
   --namespace "${NAMESPACE}" \
   --values helm/apisix/values.yaml \
@@ -112,6 +191,9 @@ echo "===> [4b/5] Wiring v2 ingress controller (GatewayProxy + IngressClass)"
 if [[ -z "${DRY_RUN}" ]]; then
   kubectl apply -f k8s/gateway-proxy.yaml
   kubectl apply -f k8s/ingressclass.yaml
+else
+  echo "    [dry-run] would run: kubectl apply -f k8s/gateway-proxy.yaml"
+  echo "    [dry-run] would run: kubectl apply -f k8s/ingressclass.yaml"
 fi
 
 echo "===> [5/5] Applying service routes"
@@ -140,6 +222,21 @@ if [[ -z "${DRY_RUN}" ]]; then
     esac
   done
   kubectl -n "${NAMESPACE}" get apisixroutes
+else
+  echo "    [dry-run] would apply the following route files (envsubst substitution noted where used):"
+  for route in routes/*.yaml; do
+    case "${route}" in
+      *suwalka-ai-services.yaml)
+        echo "      [dry-run] would run: envsubst '\${SUWALKA_AI_GATEWAY_SECRET}' < ${route} | kubectl apply -f -"
+        ;;
+      *zimma-api.yaml)
+        echo "      [dry-run] would run: envsubst '\${ZIMMA_GATEWAY_SECRET}' < ${route} | kubectl apply -f -"
+        ;;
+      *)
+        echo "      [dry-run] would run: kubectl apply -f ${route}"
+        ;;
+    esac
+  done
 fi
 
 echo "===> [6/6] Applying TLS (cert-manager issuers + Zitadel certificate + ApisixTls)"
@@ -149,18 +246,26 @@ if [[ -z "${DRY_RUN}" ]]; then
   kubectl apply -f k8s/zitadel-tls.yaml
   echo "    Certificate issuance is async; check with:"
   echo "      kubectl -n ${NAMESPACE} get certificate,order,challenge"
+else
+  echo "    [dry-run] would run: kubectl apply -f k8s/cert-issuer.yaml"
+  echo "    [dry-run] would run: kubectl apply -f k8s/zitadel-tls.yaml"
 fi
 
 echo ""
 echo "========================================================"
-echo "  Gateway deployed successfully."
-echo ""
-echo "  APISIX pods:"
-kubectl -n "${NAMESPACE}" get pods -l app.kubernetes.io/name=apisix 2>/dev/null || true
-echo ""
-echo "  Zitadel pods:"
-kubectl -n "${NAMESPACE}" get pods -l app.kubernetes.io/name=zitadel 2>/dev/null || true
-echo ""
-echo "  Next: Configure your DNS to point to the master IP"
-echo "        Then run: bash tests/smoke/smoke-test.sh https://api.nma-india.in"
+if [[ -z "${DRY_RUN}" ]]; then
+  echo "  Gateway deployed successfully."
+  echo ""
+  echo "  APISIX pods:"
+  kubectl -n "${NAMESPACE}" get pods -l app.kubernetes.io/name=apisix 2>/dev/null || true
+  echo ""
+  echo "  Zitadel pods:"
+  kubectl -n "${NAMESPACE}" get pods -l app.kubernetes.io/name=zitadel 2>/dev/null || true
+  echo ""
+  echo "  Next: Configure your DNS to point to the master IP"
+  echo "        Then run: bash tests/smoke/smoke-test.sh https://api.nma-india.in"
+else
+  echo "  Dry run complete — zero writes were made to context '${CURRENT_CONTEXT}' (${CURRENT_SERVER}),"
+  echo "  or to any other cluster. Re-run without --dry-run to actually deploy."
+fi
 echo "========================================================"
