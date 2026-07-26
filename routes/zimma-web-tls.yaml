@@ -21,9 +21,12 @@ metadata:
   namespace: sfg-labs
 spec:
   secretName: zimma-faithandgamble-tls
+  # NOTE: zimma.faithandgamble.in is deliberately NOT requested yet — it has no DNS
+  # record, and cert-manager's HTTP-01 challenge fails the ENTIRE Certificate if any
+  # listed name doesn't resolve to this gateway. Add it here once the A record for
+  # zimma -> 168.144.48.171 exists; the ApisixRoute already serves both hosts.
   dnsNames:
     - zimma-dev.faithandgamble.in
-    - zimma.faithandgamble.in
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
