@@ -344,6 +344,92 @@ spec:
         header_name: X-Request-Id
         include_in_response: true
 
+  # Suwalka interview resume link — PUBLIC BY DESIGN, and GET-ONLY.
+  #
+  # An interviewer is emailed a panel invite carrying a `Resume:` link to the
+  # candidate's CV. They click it out of their mailbox, which sends no Authorization
+  # header and no X-Userinfo — exactly like the assessment candidate and the gatepass
+  # scan above — so `openid-connect` is deliberately omitted. The opaque token in the
+  # URL IS the credential: 32 random bytes, base64url, only its sha256 stored, scoped
+  # to ONE interview, expiring (slot_end + 24h, clamped to 30 days) and revoked when
+  # the interview is cancelled.
+  #
+  # ⚠️ WITHOUT THIS BLOCK THE FEATURE DOES NOT WORK, AND NOTHING IN org-hr CAN TELL.
+  # The link it replaces was `/api/recruitment/candidates/{id}/resume`, which is under
+  # the `bearer_only: true` openid-connect rule in routes/suwalka-org-hr-payroll.yaml —
+  # so every interviewer's click was 401'd here, before org-hr was ever reached, while
+  # every test in that repo passed. That is precisely how the candidate gatepass
+  # self-scan stayed broken for ELEVEN DAYS (see the 2026-07-17 → 2026-07-28 history on
+  # `suwalka-gatepass-public` above). A new public path in that service is two PRs, and
+  # this is the other one.
+  #
+  # Scoped to /api/public/interview-resume/* rather than /api/public/* on purpose —
+  # this file's warning at the top is real, and a wildcard would silently expose any
+  # future /api/public/<anything> org-hr adds. It is a sibling of, not a replacement
+  # for, the /api/public/assessment/* rule.
+  #
+  # GET/OPTIONS only. The endpoint is a pure read and there is no write anywhere under
+  # this prefix today — but keeping the method list minimal is what stops a future
+  # POST/DELETE added under the same prefix from being unauthenticated by inheritance,
+  # which is the mistake the gatepass rule's method list exists to prevent.
+  #
+  # cors is included because a click on a mailbox link is a top-level navigation that
+  # does not preflight — but the response is served `Content-Disposition: attachment`
+  # with `Cache-Control: no-store`, and admin-web may later want to render an
+  # interviewer-facing page that fetches this cross-origin (the gatepass rule shipped
+  # WITHOUT cors on exactly the "it's a top-level navigation" reasoning and QA caught
+  # the resulting silent failure: the page rendered its generic error for a blocked
+  # read, indistinguishable from a genuinely bad token). Same origin list as the two
+  # rules above.
+  #
+  # Explicit priority, for the same reason the gatepass rule pins one: no other rule
+  # in this repo currently claims /api/public/interview-resume/*, so ordering is moot
+  # TODAY — and relying on radixtree insertion order to stay moot is how a controller
+  # restart silently puts a 401 back. It costs nothing to pin it.
+  #
+  # Rate limit is the file's standard 20/10 public default, and it is the ONLY rate
+  # limiting this endpoint has: org-hr has no in-process limiter and the feature
+  # deliberately did not invent one. 20/s absorbs a panel opening the same CV at once
+  # from one office NAT while bounding token-guessing; the token's 256 bits of entropy
+  # is the real defence, not this.
+  - name: suwalka-resume-public
+    priority: 10
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/public/interview-resume/*
+      methods:
+      - GET
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
   # Suwalka gate scanner devices — PUBLIC AT THE GATEWAY, guarded by a shared secret.
   #
   # GET /api/gate/sync and POST /api/gate/scans are the physical check-in scanners at
