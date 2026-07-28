@@ -1,10 +1,11 @@
 name: CI
 
+# Branch convention (2026-07): CI runs ONCE, on PR creation targeting `dev`.
+#   dev -> DOKS (DigitalOcean cluster) | uat -> Cantech server | main -> production (later)
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
+    branches: [dev]
+    types: [opened]
   workflow_dispatch:
 
 jobs:
