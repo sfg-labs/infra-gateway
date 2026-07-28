@@ -344,6 +344,78 @@ spec:
         header_name: X-Request-Id
         include_in_response: true
 
+  # Suwalka gate scanner devices — PUBLIC AT THE GATEWAY, guarded by a shared secret.
+  #
+  # GET /api/gate/sync and POST /api/gate/scans are the physical check-in scanners at
+  # a dealership gate. They are mounted BEFORE `readUser` in the app precisely because
+  # a scanner has no OIDC identity and never will; the app enforces the `X-Gate-Token`
+  # shared secret itself (`middleware/gateToken.ts`), mirroring the `X-Internal-Token`
+  # pattern used by /api/hr/internal/*.
+  #
+  # This was anticipated and then missed: `X-Gate-Token` is already in the CORS
+  # allow-list on routes/suwalka-org-hr-payroll.yaml:103, but no route ever exposed
+  # the path — so scanners could not reach the API at all and the scan ledger in the
+  # admin UI could never populate. Adding it was an explicit decision (Ashish,
+  # 2026-07-28), taken knowing the trade below.
+  #
+  # ⚠️ THE TRADE, STATED PLAINLY. Unlike every other rule in this file, the thing
+  # protecting these endpoints is a single shared secret, not a per-request signature
+  # or an opaque per-subject token. Two consequences worth writing down:
+  #   1. The token is global, while `GET /sync` takes `organisation_id` as a QUERY
+  #      PARAM — so a leaked token can sync ANY organisation's outstanding gatepasses,
+  #      not just the branch it was issued to. Rotating it invalidates every scanner.
+  #   2. There is no IP restriction here. If the outlets ever get static egress IPs,
+  #      add an `ip-restriction` plugin — that turns a leaked token into a useless one.
+  # Neither is a reason not to ship; both are reasons to keep the secret out of client
+  # bundles and to rotate it if a scanner device is ever lost.
+  #
+  # Methods are GET/POST/OPTIONS: sync reads, scans writes a batch. Nothing deletes.
+  #
+  # cors is included because admin-web has a gate-verify screen and the header is
+  # already allow-listed on the authenticated route; a purely native scanner will
+  # simply ignore it.
+  #
+  # Rate limit is deliberately higher than the 20/10 default: a scanner syncs on a
+  # timer and posts scan batches as a queue of candidates arrives, all from ONE
+  # reception IP, so several devices at one branch legitimately share a remote_addr.
+  - name: suwalka-gate-devices
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/gate/*
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,POST,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 40
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
   # Suwalka HR/Payroll Swagger UI — public read-only API docs, no auth required.
   # External path is /org/swagger(/*); service actually serves it at /docs, so
   # proxy-rewrite strips the external prefix before forwarding upstream.
