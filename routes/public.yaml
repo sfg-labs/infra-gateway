@@ -293,6 +293,13 @@ spec:
   # together on one reception NAT while bounding token-guessing hard — though the
   # token's own entropy is the real defence, not this.
   - name: suwalka-gatepass-public
+    # Explicit priority, unlike the assessment rule above. That one owns a prefix
+    # (/api/public/*) nothing else claims, so ordering is moot. This one sits INSIDE
+    # the JWT-protected /api/recruitment/* rule, so two rules match the same URL and
+    # whichever APISIX evaluates first decides whether the candidate is let in. It
+    # currently works without this — but relying on radixtree insertion order means a
+    # controller restart could silently put the 401 back. Pin it.
+    priority: 10
     match:
       hosts:
       - api.suwalka-pos.sfg-labs.in
@@ -307,6 +314,22 @@ spec:
       servicePort: 3001
       weight: 100
     plugins:
+    # The public gatepass page is served by admin-web on a different origin to this
+    # API and reads the response with a raw cross-origin fetch, so without ACAO the
+    # browser blocks the read even though the request itself now succeeds. My first
+    # pass omitted this on the reasoning that a QR scan is a top-level navigation —
+    # true of the API URL, but the QR actually points at admin-web's /gatepass/[token]
+    # page, which then calls this API. QA caught it: the page renders "Invalid pass."
+    # for a blocked read exactly as it does for a genuinely bad token, so the failure
+    # is invisible. Same origin list as the assessment rule.
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
     - name: limit-req
       enable: true
       config:
