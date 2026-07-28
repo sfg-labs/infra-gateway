@@ -162,6 +162,103 @@ else:
 PYEOF
 
 echo ""
+echo "===> Checking public rules nested inside a protected prefix pin their path (preflight-shadowing guard)"
+# 2026-07-28. A PUBLIC rule that sits INSIDE a JWT-protected wildcard prefix and
+# lists OPTIONS does not merely serve its own path — with a higher `priority` it
+# wins the OPTIONS match for EVERY deeper path under that prefix, and answers the
+# CORS preflight for its AUTHENTICATED siblings with its own narrow
+# `allow_methods`. Browsers then refuse to send the real request, while curl,
+# jest and Bruno — none of which preflight — stay green.
+#
+# That is exactly what `suwalka-gatepass-public` (/api/recruitment/gatepass/*,
+# priority 10, GET+OPTIONS, cors allow_methods "GET,OPTIONS") did to
+# `POST /api/recruitment/gatepass/{id}/send` and `.../revoke` in production.
+# Measured live 2026-07-28: the preflight for both returned
+# `access-control-allow-methods: GET,OPTIONS`, so admin-web's "Send QR gatepass"
+# and "Revoke" buttons could not fire at all.
+#
+# The fix is a `match.exprs` Path RegexMatch pinning the exact path shape the
+# public rule owns, so deeper siblings fall through to the protected rule. This
+# check enforces that structurally: nothing else does, and the failure mode is
+# invisible to every non-browser test in the estate.
+#
+# NOTE: the preferred design is still a dedicated prefix nothing else claims
+# (/api/public/<feature>/*, as suwalka-assessment-public and
+# suwalka-resume-public use) — such a rule is not nested and never trips this
+# check. The exprs pin is for the case where the public path is already issued
+# to the outside world and cannot be moved.
+python3 - routes/*.yaml <<'PYEOF'
+import sys, yaml
+
+def load_rules(paths):
+    out = []
+    for path in paths:
+        with open(path) as f:
+            for doc in yaml.safe_load_all(f):
+                if not doc or doc.get('kind') != 'ApisixRoute':
+                    continue
+                for rule in doc.get('spec', {}).get('http', []) or []:
+                    match = rule.get('match', {}) or {}
+                    plugins = rule.get('plugins', []) or []
+                    names = {p.get('name') for p in plugins if isinstance(p, dict)}
+                    out.append({
+                        'file': path,
+                        'name': rule.get('name', '<unnamed>'),
+                        'hosts': set(match.get('hosts') or []),
+                        'paths': list(match.get('paths') or []),
+                        # No `methods` key means EVERY method, OPTIONS included.
+                        'methods': set(m.upper() for m in (match.get('methods') or [])) or None,
+                        'protected': 'openid-connect' in names,
+                        'path_pinned': any(
+                            (e.get('subject') or {}).get('scope') == 'Path'
+                            for e in (match.get('exprs') or [])
+                        ),
+                    })
+    return out
+
+def prefixes(rule):
+    """Wildcard prefixes this rule claims, e.g. '/api/recruitment/*' -> '/api/recruitment/'."""
+    return [p[:-1] for p in rule['paths'] if p.endswith('*')]
+
+rules = load_rules(sys.argv[1:])
+protected = [r for r in rules if r['protected'] and prefixes(r)]
+
+violations = []
+for pub in rules:
+    if pub['protected'] or pub['path_pinned']:
+        continue
+    # Only rules that answer OPTIONS can steal a preflight.
+    if pub['methods'] is not None and 'OPTIONS' not in pub['methods']:
+        continue
+    for pub_prefix in prefixes(pub):
+        for prot in protected:
+            if not (pub['hosts'] & prot['hosts']):
+                continue
+            for prot_prefix in prefixes(prot):
+                # Strictly nested: the public prefix lives INSIDE the protected one.
+                if pub_prefix != prot_prefix and pub_prefix.startswith(prot_prefix):
+                    violations.append(
+                        f"{pub['file']}: PUBLIC rule '{pub['name']}' claims '{pub_prefix}*' "
+                        f"with OPTIONS, nested inside PROTECTED rule '{prot['name']}' "
+                        f"({prot['file']}) which claims '{prot_prefix}*'. It will answer the "
+                        f"CORS preflight for every authenticated endpoint deeper than "
+                        f"'{pub_prefix}' with its own allow_methods, and browsers will block "
+                        f"those calls while curl/jest/Bruno stay green. Either move the public "
+                        f"path to a prefix nothing else claims (preferred), or add a "
+                        f"match.exprs entry with subject.scope: Path pinning the exact path "
+                        f"this rule owns (see suwalka-gatepass-public in routes/public.yaml)."
+                    )
+
+if violations:
+    print("  FAIL: preflight-shadowing guard — a public rule is nested in a protected prefix:")
+    for v in sorted(set(violations)):
+        print(f"    - {v}")
+    sys.exit(1)
+else:
+    print("  PASS: every public rule nested in a protected prefix pins its path with match.exprs")
+PYEOF
+
+echo ""
 echo "========================================================"
 echo "  Results: ${PASS} passed, ${FAIL} failed"
 [[ "$FAIL" -eq 0 ]] || exit 1
