@@ -259,6 +259,68 @@ spec:
         header_name: X-Request-Id
         include_in_response: true
 
+  # Suwalka interview check-in gatepass — PUBLIC BY DESIGN, and GET-ONLY ON PURPOSE.
+  #
+  # A candidate invited to an in-person interview is issued a QR gatepass. At the
+  # gate they scan it with a phone camera, which opens this URL directly — they have
+  # no Zitadel session and never will, exactly like the assessment candidate above.
+  # The opaque token in the URL IS the credential; the app returns a display-only
+  # `public_gatepass_view` carrying no internal ids, and 410 Gone once the pass is
+  # revoked, expired, or past its `max_scans`.
+  #
+  # ⚠️ THE METHOD LIST IS A SECURITY BOUNDARY, NOT A FORMALITY.
+  # This path prefix is shared with an AUTHENTICATED endpoint:
+  #     GET  /api/recruitment/gatepass/{token}        <- the candidate self-scan (public)
+  #     POST /api/recruitment/gatepass/{id}/revoke    <- recruiter-only (MUST stay private)
+  # Restricting this rule to GET/OPTIONS is what keeps `revoke` private: a POST does
+  # not match here, so it falls through to the JWT-protected /api/recruitment/* rule
+  # in routes/suwalka-org-hr-payroll.yaml. **Adding POST here would let any caller on
+  # the internet revoke another candidate's gatepass.** The two sibling writes —
+  # issue and list — live under /api/recruitment/interviews/* and are unaffected by
+  # this prefix at all.
+  #
+  # Scoped to /api/recruitment/gatepass/* rather than a wider prefix for the same
+  # reason the assessment rule is scoped: this file's warning is real.
+  #
+  # No `cors` plugin, deliberately. A QR scan is a top-level browser navigation from
+  # a phone camera, not a cross-origin XHR, so nothing preflights. If a rendered
+  # gatepass page is ever added to admin-web, add cors then — with the origins it
+  # actually needs — rather than carrying speculative config now.
+  #
+  # Rate limit is the file's standard 20/10 public default. Unlike the assessment
+  # rule this needs no raised burst: a scan is a single GET, not a 34-question paper
+  # pulled in one page load. 20/s still absorbs a queue of candidates arriving
+  # together on one reception NAT while bounding token-guessing hard — though the
+  # token's own entropy is the real defence, not this.
+  - name: suwalka-gatepass-public
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/recruitment/gatepass/*
+      methods:
+      - GET
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
   # Suwalka HR/Payroll Swagger UI — public read-only API docs, no auth required.
   # External path is /org/swagger(/*); service actually serves it at /docs, so
   # proxy-rewrite strips the external prefix before forwarding upstream.
