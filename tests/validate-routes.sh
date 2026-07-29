@@ -162,6 +162,138 @@ else:
 PYEOF
 
 echo ""
+echo "===> Checking public rules nested inside a protected prefix pin their path (preflight-shadowing guard)"
+# 2026-07-28. A PUBLIC rule that sits INSIDE a JWT-protected wildcard prefix and
+# lists OPTIONS does not merely serve its own path — with a higher `priority` it
+# wins the OPTIONS match for EVERY deeper path under that prefix, and answers the
+# CORS preflight for its AUTHENTICATED siblings with its own narrow
+# `allow_methods`. Browsers then refuse to send the real request, while curl,
+# jest and Bruno — none of which preflight — stay green.
+#
+# That is exactly what `suwalka-gatepass-public` (/api/recruitment/gatepass/*,
+# priority 10, GET+OPTIONS, cors allow_methods "GET,OPTIONS") did to
+# `POST /api/recruitment/gatepass/{id}/send` and `.../revoke` in production.
+# Measured live 2026-07-28: the preflight for both returned
+# `access-control-allow-methods: GET,OPTIONS`, so admin-web's "Send QR gatepass"
+# and "Revoke" buttons could not fire at all.
+#
+# The fix is a `match.exprs` Path RegexMatch pinning the exact path shape the
+# public rule owns, so deeper siblings fall through to the protected rule. This
+# check enforces that structurally: nothing else does, and the failure mode is
+# invisible to every non-browser test in the estate.
+#
+# The pin must be ANCHORED (`^...$`) to count — see `pins_path` below. A Path
+# expr whose regex does not terminate still matches every deeper path, so
+# accepting one would let this guard pass on a route it does not actually fix.
+#
+# NOTE: the preferred design is still a dedicated prefix nothing else claims
+# (/api/public/<feature>/*, as suwalka-assessment-public and
+# suwalka-resume-public use) — such a rule is not nested and never trips this
+# check. The exprs pin is the escape hatch for a public path that stays where it
+# is — because relocating it would take a multi-repo, dual-path migration whose
+# rollout window would need this same pin anyway, not because anything already
+# issued to the outside world locks the path (for suwalka-gatepass-public
+# nothing does; see the note on that rule in routes/public.yaml).
+python3 - routes/*.yaml <<'PYEOF'
+import sys, yaml
+
+def pins_path(match):
+    """True only when some Path expr actually CONSTRAINS the path.
+
+    `subject.scope: Path` on its own is NOT a pin, and treating it as one
+    would make this whole guard decorative. An unanchored regex still
+    matches every deeper path and so keeps stealing the preflight:
+    `.*` at the extreme, but equally `^/api/recruitment/gatepass/` with no
+    terminator, or a bare `[^/]+$` with no leading `^`. Any of those would
+    satisfy a naive "has a Path expr" check while changing nothing.
+
+    So require the regex to be anchored at BOTH ends — `^` at the front and
+    `$` at the back. That admits the real pin
+    `^/api/recruitment/gatepass/[^/]+/?$` and the plain `...$` form, and
+    rejects everything that does not actually terminate. An `Equal`
+    comparison is already an exact match and needs no anchors.
+    """
+    for expr in (match.get('exprs') or []):
+        if (expr.get('subject') or {}).get('scope') != 'Path':
+            continue
+        op = expr.get('op')
+        if op == 'Equal':
+            return True
+        if op == 'RegexMatch':
+            value = expr.get('value') or ''
+            if value.startswith('^') and value.endswith('$'):
+                return True
+    return False
+
+def load_rules(paths):
+    out = []
+    for path in paths:
+        with open(path) as f:
+            for doc in yaml.safe_load_all(f):
+                if not doc or doc.get('kind') != 'ApisixRoute':
+                    continue
+                for rule in doc.get('spec', {}).get('http', []) or []:
+                    match = rule.get('match', {}) or {}
+                    plugins = rule.get('plugins', []) or []
+                    names = {p.get('name') for p in plugins if isinstance(p, dict)}
+                    out.append({
+                        'file': path,
+                        'name': rule.get('name', '<unnamed>'),
+                        'hosts': set(match.get('hosts') or []),
+                        'paths': list(match.get('paths') or []),
+                        # No `methods` key means EVERY method, OPTIONS included.
+                        'methods': set(m.upper() for m in (match.get('methods') or [])) or None,
+                        'protected': 'openid-connect' in names,
+                        # Anchored Path expr (or an exact Equal) — see pins_path.
+                        'path_pinned': pins_path(match),
+                    })
+    return out
+
+def prefixes(rule):
+    """Wildcard prefixes this rule claims, e.g. '/api/recruitment/*' -> '/api/recruitment/'."""
+    return [p[:-1] for p in rule['paths'] if p.endswith('*')]
+
+rules = load_rules(sys.argv[1:])
+protected = [r for r in rules if r['protected'] and prefixes(r)]
+
+violations = []
+for pub in rules:
+    if pub['protected'] or pub['path_pinned']:
+        continue
+    # Only rules that answer OPTIONS can steal a preflight.
+    if pub['methods'] is not None and 'OPTIONS' not in pub['methods']:
+        continue
+    for pub_prefix in prefixes(pub):
+        for prot in protected:
+            if not (pub['hosts'] & prot['hosts']):
+                continue
+            for prot_prefix in prefixes(prot):
+                # Strictly nested: the public prefix lives INSIDE the protected one.
+                if pub_prefix != prot_prefix and pub_prefix.startswith(prot_prefix):
+                    violations.append(
+                        f"{pub['file']}: PUBLIC rule '{pub['name']}' claims '{pub_prefix}*' "
+                        f"with OPTIONS, nested inside PROTECTED rule '{prot['name']}' "
+                        f"({prot['file']}) which claims '{prot_prefix}*'. It will answer the "
+                        f"CORS preflight for every authenticated endpoint deeper than "
+                        f"'{pub_prefix}' with its own allow_methods, and browsers will block "
+                        f"those calls while curl/jest/Bruno stay green. Either move the public "
+                        f"path to a prefix nothing else claims (preferred), or add a "
+                        f"match.exprs entry with subject.scope: Path whose RegexMatch value is "
+                        f"ANCHORED (`^...$`) pinning the exact path this rule owns — an "
+                        f"unanchored regex still matches every deeper path and fixes nothing "
+                        f"(see suwalka-gatepass-public in routes/public.yaml)."
+                    )
+
+if violations:
+    print("  FAIL: preflight-shadowing guard — a public rule is nested in a protected prefix:")
+    for v in sorted(set(violations)):
+        print(f"    - {v}")
+    sys.exit(1)
+else:
+    print("  PASS: every public rule nested in a protected prefix pins its path with an anchored match.exprs")
+PYEOF
+
+echo ""
 echo "========================================================"
 echo "  Results: ${PASS} passed, ${FAIL} failed"
 [[ "$FAIL" -eq 0 ]] || exit 1
