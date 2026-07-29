@@ -7,9 +7,9 @@
 #          Prefer a dedicated prefix nothing else claims (/api/public/<feature>/*, as
 #          `suwalka-assessment-public` and `suwalka-resume-public` below do) — such a
 #          rule shadows nothing and needs no extra guard.
-#          If a public rule MUST sit inside an authenticated prefix (as
-#          `suwalka-gatepass-public` does, because its path is already printed on QR
-#          codes in candidates' hands), a restrictive `methods:` list is NOT enough.
+#          If a public rule sits inside an authenticated prefix anyway (as
+#          `suwalka-gatepass-public` does — see the migration-cost note on that rule),
+#          a restrictive `methods:` list is NOT enough.
 #          The public rule still needs OPTIONS for its own browser callers, and a
 #          higher `priority` makes it win the OPTIONS match for EVERY deeper path
 #          under that prefix — so it answers the preflight for the authenticated
@@ -330,13 +330,41 @@ spec:
   # because express's non-strict router accepts one; it still excludes any deeper segment.
   #
   # WHY NARROW RATHER THAN MOVE THE PATH. The obvious alternative was to relocate the
-  # self-scan to /api/public/gatepass/*, matching its two siblings above. Rejected: QR
-  # codes and gatepass links carrying /api/recruitment/gatepass/<token> are ALREADY IN
-  # CANDIDATES' HANDS with a live validity window, so the old path must keep working —
-  # which means keeping this rule — which means the shadowing has to be fixed HERE
-  # anyway. Moving would add an org-hr change, an admin-web change and a dual-path
-  # compatibility window on top of a fix that this regex completes on its own. Narrowing
-  # is strictly additive to security, breaks no issued pass, and needs no other repo.
+  # self-scan to /api/public/gatepass/*, matching its two siblings above. Narrowing won
+  # on MIGRATION COST — not on backwards compatibility.
+  #
+  # Be clear about that, because an earlier draft of this comment justified the choice by
+  # claiming issued QR codes and candidate links carry /api/recruitment/gatepass/<token>
+  # and so pin this path forever. That is FALSE, and it is worth recording as false so
+  # nobody inherits it as a constraint:
+  #   - The QR encodes the BARE SIGNED TOKEN, never a URL. The generator is
+  #     `QRCode.toDataURL(token, ...)` (org-hr `src/services/gatepass.service.ts:129`);
+  #     the contract is stated on `src/types/gatepass.responses.ts:102-105` ("PNG data-URI
+  #     whose payload is the BARE signed token in `qr_token` — never a URL, in any
+  #     environment") and mirrored into `src/swagger.json:26338`. The test at
+  #     `src/__tests__/recruitment/gatepass.test.ts:272-275` asserts the PNG equals
+  #     toDataURL(token) and explicitly does NOT equal toDataURL(url). It has to be the
+  #     bare token: a synced `/api/gate/sync` device verifies `SGP1.<payload>.<sig>`
+  #     against a public key with no network, and a URL would break that offline path.
+  #   - The emailed / WhatsApp link points at an ADMIN-WEB PAGE, not at this API path:
+  #     `${GATEPASS_PUBLIC_BASE_URL ?? HRMS_APP_BASE_URL}/gatepass/<token>`
+  #     (`src/services/gatepass-notify.ts:67,78-80`), rendered by admin-web's
+  #     `src/app/gatepass/[token]/page.tsx`. `gatepass.responses.ts:107-111` says so in as
+  #     many words: "it is NOT what the QR encodes".
+  #   - So this API path is only ever called by admin-web's own JavaScript, from that
+  #     page. Nothing outside the estate holds it, and no issued pass would break if it
+  #     moved tomorrow.
+  #
+  # The real reason is scope, and it is enough on its own. Narrowing is ONE repo and ONE
+  # field — the `exprs` block below — strictly additive, effective the moment the route is
+  # applied, with no interval in which anything is half-migrated. Moving the path would
+  # take THREE repos in lockstep (this route, org-hr's mount plus the base URL it composes
+  # `gatepass_url` from, and admin-web's fetch), and those three deploys cannot land
+  # atomically, so it would need a dual-path window with BOTH paths live during rollout —
+  # throughout which the old path still exists and still shadows the preflight, meaning
+  # this exact regex would be required anyway just to survive the migration. Narrowing
+  # skips the window entirely and leaves the estate strictly more locked down than before.
+  # If the path is ever moved for tidiness, that is a planned migration, not a fix.
   #
   # THE RULE THIS ESTABLISHES: a public rule under an authenticated prefix must pin the
   # exact shape of the path it owns, not just its methods. A method list alone leaks the

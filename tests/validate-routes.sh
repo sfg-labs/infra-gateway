@@ -182,13 +182,48 @@ echo "===> Checking public rules nested inside a protected prefix pin their path
 # check enforces that structurally: nothing else does, and the failure mode is
 # invisible to every non-browser test in the estate.
 #
+# The pin must be ANCHORED (`^...$`) to count — see `pins_path` below. A Path
+# expr whose regex does not terminate still matches every deeper path, so
+# accepting one would let this guard pass on a route it does not actually fix.
+#
 # NOTE: the preferred design is still a dedicated prefix nothing else claims
 # (/api/public/<feature>/*, as suwalka-assessment-public and
 # suwalka-resume-public use) — such a rule is not nested and never trips this
-# check. The exprs pin is for the case where the public path is already issued
-# to the outside world and cannot be moved.
+# check. The exprs pin is the escape hatch for a public path that stays where it
+# is — because relocating it would take a multi-repo, dual-path migration whose
+# rollout window would need this same pin anyway, not because anything already
+# issued to the outside world locks the path (for suwalka-gatepass-public
+# nothing does; see the note on that rule in routes/public.yaml).
 python3 - routes/*.yaml <<'PYEOF'
 import sys, yaml
+
+def pins_path(match):
+    """True only when some Path expr actually CONSTRAINS the path.
+
+    `subject.scope: Path` on its own is NOT a pin, and treating it as one
+    would make this whole guard decorative. An unanchored regex still
+    matches every deeper path and so keeps stealing the preflight:
+    `.*` at the extreme, but equally `^/api/recruitment/gatepass/` with no
+    terminator, or a bare `[^/]+$` with no leading `^`. Any of those would
+    satisfy a naive "has a Path expr" check while changing nothing.
+
+    So require the regex to be anchored at BOTH ends — `^` at the front and
+    `$` at the back. That admits the real pin
+    `^/api/recruitment/gatepass/[^/]+/?$` and the plain `...$` form, and
+    rejects everything that does not actually terminate. An `Equal`
+    comparison is already an exact match and needs no anchors.
+    """
+    for expr in (match.get('exprs') or []):
+        if (expr.get('subject') or {}).get('scope') != 'Path':
+            continue
+        op = expr.get('op')
+        if op == 'Equal':
+            return True
+        if op == 'RegexMatch':
+            value = expr.get('value') or ''
+            if value.startswith('^') and value.endswith('$'):
+                return True
+    return False
 
 def load_rules(paths):
     out = []
@@ -209,10 +244,8 @@ def load_rules(paths):
                         # No `methods` key means EVERY method, OPTIONS included.
                         'methods': set(m.upper() for m in (match.get('methods') or [])) or None,
                         'protected': 'openid-connect' in names,
-                        'path_pinned': any(
-                            (e.get('subject') or {}).get('scope') == 'Path'
-                            for e in (match.get('exprs') or [])
-                        ),
+                        # Anchored Path expr (or an exact Equal) — see pins_path.
+                        'path_pinned': pins_path(match),
                     })
     return out
 
@@ -245,8 +278,10 @@ for pub in rules:
                         f"'{pub_prefix}' with its own allow_methods, and browsers will block "
                         f"those calls while curl/jest/Bruno stay green. Either move the public "
                         f"path to a prefix nothing else claims (preferred), or add a "
-                        f"match.exprs entry with subject.scope: Path pinning the exact path "
-                        f"this rule owns (see suwalka-gatepass-public in routes/public.yaml)."
+                        f"match.exprs entry with subject.scope: Path whose RegexMatch value is "
+                        f"ANCHORED (`^...$`) pinning the exact path this rule owns — an "
+                        f"unanchored regex still matches every deeper path and fixes nothing "
+                        f"(see suwalka-gatepass-public in routes/public.yaml)."
                     )
 
 if violations:
@@ -255,7 +290,7 @@ if violations:
         print(f"    - {v}")
     sys.exit(1)
 else:
-    print("  PASS: every public rule nested in a protected prefix pins its path with match.exprs")
+    print("  PASS: every public rule nested in a protected prefix pins its path with an anchored match.exprs")
 PYEOF
 
 echo ""
