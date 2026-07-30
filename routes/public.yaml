@@ -3,6 +3,23 @@
 # WARNING: Adding a path here means ANY caller can reach it unauthenticated.
 #          Review every addition carefully before merging.
 #
+# WARNING 2 — A PUBLIC RULE UNDER AN AUTHENTICATED PREFIX ALSO STEALS THE PREFLIGHT.
+#          Prefer a dedicated prefix nothing else claims (/api/public/<feature>/*, as
+#          `suwalka-assessment-public` and `suwalka-resume-public` below do) — such a
+#          rule shadows nothing and needs no extra guard.
+#          If a public rule sits inside an authenticated prefix anyway (as
+#          `suwalka-gatepass-public` does — see the migration-cost note on that rule),
+#          a restrictive `methods:` list is NOT enough.
+#          The public rule still needs OPTIONS for its own browser callers, and a
+#          higher `priority` makes it win the OPTIONS match for EVERY deeper path
+#          under that prefix — so it answers the preflight for the authenticated
+#          siblings with its own narrow `allow_methods`, and every browser then
+#          refuses to send the real request. Nothing in the service's own test suite
+#          can see this: curl, jest and Bruno do not preflight.
+#          Pin the exact path shape with a `match.exprs` Path RegexMatch as well
+#          (see `suwalka-gatepass-public`), and verify with an actual
+#          `OPTIONS <path> -H 'Access-Control-Request-Method: POST'`.
+#
 # NOTE: This APISIX ingress controller (ApisixRoute apisix.apache.org/v2) routes only to
 # Services in the ApisixRoute's OWN namespace — there is no backends[].serviceNamespace.
 # So the public routes are split into one ApisixRoute per backend namespace.
@@ -269,15 +286,89 @@ spec:
   # revoked, expired, or past its `max_scans`.
   #
   # ⚠️ THE METHOD LIST IS A SECURITY BOUNDARY, NOT A FORMALITY.
-  # This path prefix is shared with an AUTHENTICATED endpoint:
+  # This path prefix is shared with TWO AUTHENTICATED endpoints:
   #     GET  /api/recruitment/gatepass/{token}        <- the candidate self-scan (public)
+  #     POST /api/recruitment/gatepass/{id}/send      <- recruiter-only (MUST stay private)
   #     POST /api/recruitment/gatepass/{id}/revoke    <- recruiter-only (MUST stay private)
-  # Restricting this rule to GET/OPTIONS is what keeps `revoke` private: a POST does
+  # Restricting this rule to GET/OPTIONS is what keeps those two private: a POST does
   # not match here, so it falls through to the JWT-protected /api/recruitment/* rule
   # in routes/suwalka-org-hr-payroll.yaml. **Adding POST here would let any caller on
-  # the internet revoke another candidate's gatepass.** The two sibling writes —
-  # issue and list — live under /api/recruitment/interviews/* and are unaffected by
-  # this prefix at all.
+  # the internet re-send or revoke another candidate's gatepass.** The two sibling
+  # writes — issue and list — live under /api/recruitment/interviews/* and are
+  # unaffected by this prefix at all.
+  #
+  # ⚠️ THE `exprs` PATH REGEX IS THE OTHER HALF OF THAT BOUNDARY (added 2026-07-28).
+  # The method list keeps the real POST private, but it does NOT keep the POST's CORS
+  # PREFLIGHT away from this rule — OPTIONS is in the list, and it has to be, because
+  # admin-web's public gatepass page fetches the scan URL cross-origin. So before this
+  # regex, `OPTIONS /api/recruitment/gatepass/{id}/send` matched HERE (priority 10 beats
+  # the authenticated rule's unset 0) and was answered by THIS rule's cors plugin with
+  # `access-control-allow-methods: GET,OPTIONS`. Every browser then refused to send the
+  # POST at all. Measured live 2026-07-28:
+  #
+  #   OPTIONS /api/recruitment/gatepass/<id>/send   ACRM: POST
+  #     -> 200, access-control-allow-methods: GET,OPTIONS            (browser BLOCKS)
+  #   OPTIONS /api/recruitment/gatepass/<id>/revoke ACRM: POST
+  #     -> 200, access-control-allow-methods: GET,OPTIONS            (browser BLOCKS)
+  #   OPTIONS /api/recruitment/interviews/<id>/resend-invite  (control, same service)
+  #     -> 200, access-control-allow-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+  #
+  # Both "Send QR gatepass" and "Revoke" were therefore dead in every browser while
+  # curl, jest and Bruno all passed — none of them preflight. Same failure family as
+  # the eleven-day 401 on the self-scan and the interviewer resume link: a gateway-layer
+  # break the application's own test suite structurally cannot see.
+  #
+  # The regex restores the boundary by making this rule match ONLY the single trailing
+  # segment it was ever meant to own — the token — and nothing deeper. `/{id}/send` and
+  # `/{id}/revoke` no longer match here AT ALL, for any method including OPTIONS, so
+  # their preflight falls through to the authenticated /api/recruitment/* rule and is
+  # answered with that rule's full method list. `scope: Path` maps to APISIX's `uri`
+  # variable and `RegexMatch` to the `~~` operator (apisix-ingress-controller v2.1.0,
+  # api/v2/apisixroute_types.go ToVars), i.e. `["uri","~~","^/api/recruitment/gatepass/[^/]+/?$"]`.
+  # The token is `SGP1.<b64url payload>.<b64url sig>` — dots and base64url only, never a
+  # slash — so `[^/]+` matches every real token. The optional trailing slash is tolerated
+  # because express's non-strict router accepts one; it still excludes any deeper segment.
+  #
+  # WHY NARROW RATHER THAN MOVE THE PATH. The obvious alternative was to relocate the
+  # self-scan to /api/public/gatepass/*, matching its two siblings above. Narrowing won
+  # on MIGRATION COST — not on backwards compatibility.
+  #
+  # Be clear about that, because an earlier draft of this comment justified the choice by
+  # claiming issued QR codes and candidate links carry /api/recruitment/gatepass/<token>
+  # and so pin this path forever. That is FALSE, and it is worth recording as false so
+  # nobody inherits it as a constraint:
+  #   - The QR encodes the BARE SIGNED TOKEN, never a URL. The generator is
+  #     `QRCode.toDataURL(token, ...)` (org-hr `src/services/gatepass.service.ts:129`);
+  #     the contract is stated on `src/types/gatepass.responses.ts:102-105` ("PNG data-URI
+  #     whose payload is the BARE signed token in `qr_token` — never a URL, in any
+  #     environment") and mirrored into `src/swagger.json:26338`. The test at
+  #     `src/__tests__/recruitment/gatepass.test.ts:272-275` asserts the PNG equals
+  #     toDataURL(token) and explicitly does NOT equal toDataURL(url). It has to be the
+  #     bare token: a synced `/api/gate/sync` device verifies `SGP1.<payload>.<sig>`
+  #     against a public key with no network, and a URL would break that offline path.
+  #   - The emailed / WhatsApp link points at an ADMIN-WEB PAGE, not at this API path:
+  #     `${GATEPASS_PUBLIC_BASE_URL ?? HRMS_APP_BASE_URL}/gatepass/<token>`
+  #     (`src/services/gatepass-notify.ts:67,78-80`), rendered by admin-web's
+  #     `src/app/gatepass/[token]/page.tsx`. `gatepass.responses.ts:107-111` says so in as
+  #     many words: "it is NOT what the QR encodes".
+  #   - So this API path is only ever called by admin-web's own JavaScript, from that
+  #     page. Nothing outside the estate holds it, and no issued pass would break if it
+  #     moved tomorrow.
+  #
+  # The real reason is scope, and it is enough on its own. Narrowing is ONE repo and ONE
+  # field — the `exprs` block below — strictly additive, effective the moment the route is
+  # applied, with no interval in which anything is half-migrated. Moving the path would
+  # take THREE repos in lockstep (this route, org-hr's mount plus the base URL it composes
+  # `gatepass_url` from, and admin-web's fetch), and those three deploys cannot land
+  # atomically, so it would need a dual-path window with BOTH paths live during rollout —
+  # throughout which the old path still exists and still shadows the preflight, meaning
+  # this exact regex would be required anyway just to survive the migration. Narrowing
+  # skips the window entirely and leaves the estate strictly more locked down than before.
+  # If the path is ever moved for tidiness, that is a planned migration, not a fix.
+  #
+  # THE RULE THIS ESTABLISHES: a public rule under an authenticated prefix must pin the
+  # exact shape of the path it owns, not just its methods. A method list alone leaks the
+  # preflight, and a leaked preflight is invisible to every non-browser test.
   #
   # Scoped to /api/recruitment/gatepass/* rather than a wider prefix for the same
   # reason the assessment rule is scoped: this file's warning is real.
@@ -309,6 +400,14 @@ spec:
       methods:
       - GET
       - OPTIONS
+      # Owns the token segment and nothing deeper. See the `exprs` note above: this is
+      # what stops this rule answering the CORS preflight for the authenticated
+      # /{id}/send and /{id}/revoke POSTs with its own restrictive GET,OPTIONS.
+      exprs:
+      - subject:
+          scope: Path
+        op: RegexMatch
+        value: "^/api/recruitment/gatepass/[^/]+/?$"
     backends:
     - serviceName: suwalka-org-hr-payroll
       servicePort: 3001
@@ -322,6 +421,92 @@ spec:
     # page, which then calls this API. QA caught it: the page renders "Invalid pass."
     # for a blocked read exactly as it does for a genuinely bad token, so the failure
     # is invisible. Same origin list as the assessment rule.
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  # Suwalka interview resume link — PUBLIC BY DESIGN, and GET-ONLY.
+  #
+  # An interviewer is emailed a panel invite carrying a `Resume:` link to the
+  # candidate's CV. They click it out of their mailbox, which sends no Authorization
+  # header and no X-Userinfo — exactly like the assessment candidate and the gatepass
+  # scan above — so `openid-connect` is deliberately omitted. The opaque token in the
+  # URL IS the credential: 32 random bytes, base64url, only its sha256 stored, scoped
+  # to ONE interview, expiring (slot_end + 24h, clamped to 30 days) and revoked when
+  # the interview is cancelled.
+  #
+  # ⚠️ WITHOUT THIS BLOCK THE FEATURE DOES NOT WORK, AND NOTHING IN org-hr CAN TELL.
+  # The link it replaces was `/api/recruitment/candidates/{id}/resume`, which is under
+  # the `bearer_only: true` openid-connect rule in routes/suwalka-org-hr-payroll.yaml —
+  # so every interviewer's click was 401'd here, before org-hr was ever reached, while
+  # every test in that repo passed. That is precisely how the candidate gatepass
+  # self-scan stayed broken for ELEVEN DAYS (see the 2026-07-17 → 2026-07-28 history on
+  # `suwalka-gatepass-public` above). A new public path in that service is two PRs, and
+  # this is the other one.
+  #
+  # Scoped to /api/public/interview-resume/* rather than /api/public/* on purpose —
+  # this file's warning at the top is real, and a wildcard would silently expose any
+  # future /api/public/<anything> org-hr adds. It is a sibling of, not a replacement
+  # for, the /api/public/assessment/* rule.
+  #
+  # GET/OPTIONS only. The endpoint is a pure read and there is no write anywhere under
+  # this prefix today — but keeping the method list minimal is what stops a future
+  # POST/DELETE added under the same prefix from being unauthenticated by inheritance,
+  # which is the mistake the gatepass rule's method list exists to prevent.
+  #
+  # cors is included because a click on a mailbox link is a top-level navigation that
+  # does not preflight — but the response is served `Content-Disposition: attachment`
+  # with `Cache-Control: no-store`, and admin-web may later want to render an
+  # interviewer-facing page that fetches this cross-origin (the gatepass rule shipped
+  # WITHOUT cors on exactly the "it's a top-level navigation" reasoning and QA caught
+  # the resulting silent failure: the page rendered its generic error for a blocked
+  # read, indistinguishable from a genuinely bad token). Same origin list as the two
+  # rules above.
+  #
+  # Explicit priority, for the same reason the gatepass rule pins one: no other rule
+  # in this repo currently claims /api/public/interview-resume/*, so ordering is moot
+  # TODAY — and relying on radixtree insertion order to stay moot is how a controller
+  # restart silently puts a 401 back. It costs nothing to pin it.
+  #
+  # Rate limit is the file's standard 20/10 public default, and it is the ONLY rate
+  # limiting this endpoint has: org-hr has no in-process limiter and the feature
+  # deliberately did not invent one. 20/s absorbs a panel opening the same CV at once
+  # from one office NAT while bounding token-guessing; the token's 256 bits of entropy
+  # is the real defence, not this.
+  - name: suwalka-resume-public
+    priority: 10
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/public/interview-resume/*
+      methods:
+      - GET
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
     - name: cors
       enable: true
       config:
