@@ -565,10 +565,28 @@ spec:
   # radixtree insertion order means a controller restart could silently put the
   # 401 back.
   #
-  # Rate limit is the file's standard 20/10 public default. The apply endpoint
-  # additionally has its own in-process per-IP limiter (5 applies / 15 min,
-  # careersPublic.rateLimit.ts) — this gateway limit bounds scraping of the
-  # read endpoints; the app-side one bounds application spam specifically.
+  # Rate limit is the file's standard 20/10 public default, and it bounds
+  # SCRAPING OF THE READS only — the apply POST gets its own, much tighter rule
+  # below (`suwalka-careers-apply-public`, 5/2, matching the razorpay webhook,
+  # the only other public WRITE in this file). Sizing the write like a read was
+  # wrong: this is an unauthenticated INSERT into a database holding real PII.
+  #
+  # ⚠ AND THESE LIMITS ARE COARSE, NOT PER-CLIENT. `key: remote_addr` is
+  # degraded estate-wide by `externalTrafficPolicy: Cluster` — kube-proxy SNATs
+  # traffic landing on a non-APISIX node, so ~2/3 of requests arrive as one of
+  # two NODE IPs (sampled access logs, see the RATE LIMITING note in
+  # routes/suwalka-auth.yaml). Treat both numbers as volumetric backstops
+  # against floods, never as anti-enumeration controls. The anti-enumeration
+  # work is done in the application: the apply returns an identical receipt for
+  # a new applicant, a duplicate, and an email owned by a deleted candidate.
+  #
+  # X-Client-IP (see proxy-rewrite below) is what the SERVICE keys its own
+  # limiter on, because it cannot trust X-Forwarded-For: nothing upstream of
+  # APISIX populates XFF (L4 LB, no PROXY protocol, no Cloudflare — as recorded
+  # on the auth route), so an inbound XFF is purely client-authored, and every
+  # proxy APPENDS, leaving a forged value FIRST. Injecting $remote_addr here
+  # and overwriting any caller-supplied value is the zimma-api house pattern
+  # (routes/zimma-api.yaml).
   #
   # cors origin list mirrors the three public rules above (the page is served by
   # admin-web on those origins); allow_methods includes POST because the apply
@@ -616,6 +634,84 @@ spec:
         rejected_code: 429
         key_type: var
         key: remote_addr
+    # Hand the service a client identity it can actually trust. `set` (not
+    # `add`) so a caller-supplied X-Client-IP is DISCARDED and replaced with
+    # $remote_addr as APISIX's nginx sees it — the service reads only this
+    # header and never X-Forwarded-For, which in this estate is 100%
+    # client-authored. Same mechanism and reasoning as routes/zimma-api.yaml.
+    - name: proxy-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Client-IP: "$remote_addr"
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  # Suwalka careers APPLY — the WRITE half, split out for a tighter limit.
+  #
+  # Higher priority than `suwalka-careers-public` above so this rule wins for
+  # the apply path; that rule keeps serving the two GETs. Everything else about
+  # the two is identical by design (same cors origins, same X-Client-IP
+  # injection) — only the rate limit differs.
+  #
+  # 5/2 matches `baithak-razorpay-webhook`, the only other public WRITE in this
+  # file, rather than the 20/10 READ default. This endpoint INSERTs candidate
+  # rows — real PII — from wholly unauthenticated traffic, so it should not
+  # share a budget with browsing the job list. See the coarseness caveat on the
+  # rule above: with etp=Cluster SNAT this is a volumetric backstop, not a
+  # per-person control, which is why the application also runs its own limiter
+  # (20 applies / 15 min per X-Client-IP, careersPublic.rateLimit.ts) and why
+  # neither number is relied on for anti-enumeration.
+  - name: suwalka-careers-apply-public
+    priority: 20
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/recruitment/public/careers/jobs/*
+      methods:
+      - POST
+      - OPTIONS
+      # Owns ONLY `/jobs/{slug}/apply`, anchored — so it cannot swallow a
+      # future POST added elsewhere under the prefix, and the preflight it
+      # answers is always its own.
+      exprs:
+      - subject:
+          scope: Path
+        op: RegexMatch
+        value: "^/api/recruitment/public/careers/jobs/[^/]+/apply/?$"
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "POST,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 5
+        burst: 2
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: proxy-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Client-IP: "$remote_addr"
     - name: request-id
       enable: true
       config:
