@@ -39,6 +39,12 @@ spec:
       - /api/helpdesk/*
       - /api/grievances/*
       - /api/training/*
+      # Manpower Certification (Training & Certification Management). The module
+      # ships under /api/training/manpower-certifications/* — already covered by
+      # the line above — so this prefix is OPTIONAL: it exists only if we later
+      # want the module addressable under a top-level /api/manpower/* surface.
+      # Adding a prefix here is additive; removing one silently breaks callers.
+      - /api/manpower/*
       # Unprefixed careers/recruitment surface. This path is LIVE and was
       # missing from this file — applying the file without it would have
       # deleted it from the route. Kept last to match the deployed path order
