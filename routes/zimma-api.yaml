@@ -267,6 +267,19 @@ spec:
       - /zimma/api/pulse/*
       - /zimma/api/members
       - /zimma/api/members/*
+      # GET /api/me — the caller's own identity (name, email, workspace NAME,
+      # role, designation/department/branch, hasPhoto). Shipped in zimma-api #6
+      # and reached production 404ing at the GATEWAY, not the app: this list is
+      # an explicit enumeration, and a genuinely new top-level path has to be
+      # added here or it is simply not routed. `/zimma/api/members/*` already
+      # covered the sibling photo endpoint, which is why only this one broke.
+      #
+      # Both spellings, for the reason documented on the SSO rule above: APISIX
+      # matches these as an exact, case-sensitive set, while Express is
+      # non-strict about a trailing slash — so `/zimma/api/me/` would otherwise
+      # miss this rule.
+      - /zimma/api/me
+      - /zimma/api/me/
       - /zimma/api/policies
       - /zimma/api/policies/*
       - /zimma/api/proposals
