@@ -15,7 +15,14 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-org-hr-payroll
-  namespace: sfg-labs
+  # RECONCILED TO CANTECH, 2026-08-13 — this file previously said `sfg-labs`,
+  # which is where the DOKS-era route lived. The live route is in `sfg-pos-app`
+  # on the Cantech cluster (verified against the running object's
+  # kubectl.kubernetes.io/last-applied-configuration), and DOKS no longer has a
+  # kubeconfig context here after the cutover. Applying the old value would have
+  # created a SECOND route in a namespace nothing serves, while leaving the real
+  # one untouched. Same reconcile-to-deployed-reality posture as PR #30.
+  namespace: sfg-pos-app
   labels:
     sfg-project: suwalka
     sfg-auth: jwt
@@ -29,8 +36,12 @@ spec:
   - name: suwalka-org-hr-payroll-api
     match:
       hosts:
-      - api.suwalka-pos.sfg-labs.in
+      # RECONCILED TO CANTECH, 2026-08-13. `api.suwalka-pos.sfg-labs.in` was
+      # listed here and does not resolve; the live route serves these two, and
+      # `uat-api.faithandgamble.in` was MISSING from this file — applying it as
+      # written would have dropped UAT off this route entirely.
       - api.faithandgamble.in
+      - uat-api.faithandgamble.in
       paths:
       - /api/hr/*
       - /api/recruitment/*
@@ -39,6 +50,12 @@ spec:
       - /api/helpdesk/*
       - /api/grievances/*
       - /api/training/*
+      # LIVE on the cluster and MISSING from this file until 2026-08-13.
+      # Applying the file without it would have deleted the manpower
+      # certification surface from the route — the same class of near-miss the
+      # /recruitment/* comment below records. Verified serving (401) before this
+      # line was added.
+      - /api/manpower/*
       # Probation management (org-hr, spec 2026-08-13-probation-and-trainer-
       # management-design). Same pod as every path above — org-hr:3001 — so
       # this needs no new upstream, only admission at the edge. Carries the
