@@ -212,6 +212,11 @@ create_route "63" "suwalka-perf-api"        "api.suwalka.localhost" "/api/perf/"
 create_route "64" "suwalka-docs-api"        "api.suwalka.localhost" "/api/docs/"        "5" "true"
 create_route "65" "suwalka-helpdesk-api"    "api.suwalka.localhost" "/api/helpdesk/"    "5" "true"
 create_route "66" "suwalka-training-api"    "api.suwalka.localhost" "/api/training/"    "5" "true"
+# Probation management — mirrors the /api/probation/* path added to
+# routes/suwalka-org-hr-payroll.yaml. Id 79: 67-78 are already taken by other
+# services further down this file, and reusing one would silently REPLACE that
+# route on the Admin API (PUT is upsert by id, not create).
+create_route "79" "suwalka-probation-api"   "api.suwalka.localhost" "/api/probation/"   "5" "true"
 create_health_route "61" "suwalka-hr-health" "api.suwalka.localhost" "5"
 
 # Mixed: Zimma (mirrors routes/zimma-api.yaml — only SSO carries openid-connect)
