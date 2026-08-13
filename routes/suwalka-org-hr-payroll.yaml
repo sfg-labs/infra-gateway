@@ -39,6 +39,12 @@ spec:
       - /api/helpdesk/*
       - /api/grievances/*
       - /api/training/*
+      # Probation management (org-hr, spec 2026-08-13-probation-and-trainer-
+      # management-design). Same pod as every path above — org-hr:3001 — so
+      # this needs no new upstream, only admission at the edge. Carries the
+      # `openid-connect` plugin below like its siblings: HR/RM/GM assessment
+      # content must never be reachable without a verified token.
+      - /api/probation/*
       # Unprefixed careers/recruitment surface. This path is LIVE and was
       # missing from this file — applying the file without it would have
       # deleted it from the route. Kept last to match the deployed path order
