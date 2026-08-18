@@ -37,6 +37,14 @@ spec:
       - /api/perf/*
       - /api/docs/*
       - /api/helpdesk/*
+      # BOTH forms are required. APISIX's `/api/grievances/*` matches only when
+      # something follows the slash, so it covers every sub-path (/me, /list,
+      # /{id}, /{id}/resolve …) but NOT the collection root itself. The root is
+      # `POST /api/grievances` — the raise endpoint, and the single most-used
+      # call in the module. Without the exact path it 404s, and because the 404
+      # is served before the cors plugin ever runs the browser reports it as an
+      # opaque CORS failure rather than a missing route.
+      - /api/grievances
       - /api/grievances/*
       - /api/training/*
       # Unprefixed careers/recruitment surface. This path is LIVE and was
