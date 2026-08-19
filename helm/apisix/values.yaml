@@ -115,6 +115,7 @@ ingress-controller:
         - sfg-gateway
         - sfg-apps
         - sfg-labs     # Suwalka services live here (see routes/suwalka-*.yaml)
+        - nma-india    # NMA India backend pods live here (see routes/nma-*.yaml)
 
   resources:
     requests:
