@@ -3,8 +3,11 @@
 # unlike Secrets, which must be created imperatively from GitHub Secrets at deploy time.
 #
 #   sfg-gateway — APISIX, Zitadel, the ingress controller, and Zitadel's Postgres
-#   sfg-apps    — NMA / Baithak / CMS backend pods
+#   sfg-apps    — Baithak / CMS backend pods
 #   sfg-labs    — Suwalka Motors backend pods (see routes/suwalka-*.yaml)
+#   nma-india   — NMA India backend pods (see routes/nma-*.yaml) — owned by
+#                 nma-india-infra/k8s/namespace.yaml, listed here too since
+#                 the ingress controller must watch it (see helm/apisix/values.yaml)
 ---
 apiVersion: v1
 kind: Namespace
@@ -26,6 +29,14 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: sfg-labs
+  labels:
+    app.kubernetes.io/part-of: sfg-gateway
+    sfg-labs.in/tier: backend
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nma-india
   labels:
     app.kubernetes.io/part-of: sfg-gateway
     sfg-labs.in/tier: backend

@@ -99,12 +99,12 @@ spec:
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
-  name: public-routes-apps
-  namespace: sfg-apps
+  name: public-routes-nma-india
+  namespace: nma-india
   labels:
     sfg-auth: public
   annotations:
-    sfg-labs.in/description: "Public routes — NMA/Baithak/CMS health + webhooks"
+    sfg-labs.in/description: "Public routes — NMA India health checks"
 spec:
   ingressClassName: apisix
   http:
@@ -113,7 +113,7 @@ spec:
   - name: nma-health
     match:
       hosts:
-      - api.nma-india.in
+      - api.nomainaudit.com
       paths:
       - /health
       - /health/live
@@ -121,9 +121,22 @@ spec:
       methods:
       - GET
     backends:
-    - serviceName: nma-india-engine
-      servicePort: 3000
+    - serviceName: nma-engine
+      servicePort: 3001
       weight: 100
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: public-routes-apps
+  namespace: sfg-apps
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes — Baithak/CMS health + webhooks"
+spec:
+  ingressClassName: apisix
+  http:
 
   # Baithak health check — explicit paths only
   - name: baithak-health
