@@ -1,0 +1,174 @@
+name: CD-Cantech (routes)
+
+# Applies routes/ to the Cantech cluster (sfg-prod). This is the ONLY workflow in this repo
+# that can reach Cantech — cd.yaml targets the retired DigitalOcean cluster and its last
+# successful run was 2026-07-09.
+#
+# WHY THIS IS DIFF-GATED RATHER THAN A PLAIN `kubectl apply -f routes/`
+#
+# An ApisixRoute apply REPLACES spec.http; it does not merge into it. So a file that has
+# drifted behind the cluster does not fail — it silently DELETES the live rules it is missing.
+# That is not theoretical in this repo:
+#   * routes/suwalka-org-hr-payroll.yaml was missing /api/manpower/* and /api/probation/*,
+#     both serving, until 2026-08-19.
+#   * The APISIX ingress controller watches ALL namespaces, so a file declaring the wrong
+#     namespace does not update the serving route — it creates a SECOND route competing for
+#     the same paths on the same host. Applying routes/public.yaml on 2026-08-19 05:08 UTC
+#     left exactly such a duplicate `public-routes-suwalka` in sfg-labs.
+#
+# So `plan` (kubectl diff, read-only) runs on every push and is the default. `apply` requires
+# an explicit workflow_dispatch with confirm=apply, and refuses to run while any route file
+# still resolves to a namespace other than the one it serves from. Flip the default to apply
+# only once every file under routes/ diffs clean — see docs/CD_RECONCILIATION.md.
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'routes/**'
+      - '.github/workflows/cd-cantech.yaml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'plan (kubectl diff only) or apply (writes to sfg-prod)'
+        required: true
+        type: choice
+        options: [plan, apply]
+        default: plan
+
+concurrency:
+  group: cd-cantech-infra-gateway
+  cancel-in-progress: false
+
+jobs:
+  routes:
+    name: ${{ github.event.inputs.mode == 'apply' && 'Apply' || 'Plan' }} routes on Cantech
+    runs-on: [self-hosted, linux, x64]
+    env:
+      KUBECONFIG: ${{ github.workspace }}/.kubeconfig
+      # A push never applies. Only an explicit dispatch with mode=apply does.
+      MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode || 'plan' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.30.0
+
+      - name: Write kubeconfig from secret (base64)
+        run: |
+          echo "${{ secrets.CANTECH_KUBECONFIG }}" | tr -d '[:space:]' | base64 -d > "$KUBECONFIG"
+          chmod 600 "$KUBECONFIG"
+
+      # Same tripwire as helm/deploy.sh: a dry-run once ran against the wrong cluster and
+      # created three real namespaces there. Print the target before anything reads or writes.
+      - name: Show target cluster
+        run: |
+          echo ">>> CONTEXT: $(kubectl config current-context)"
+          echo ">>> SERVER : $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+          echo ">>> MODE   : $MODE"
+          kubectl get ns sfg-pos-app >/dev/null \
+            || { echo "::error::sfg-pos-app not found — this is not the Cantech cluster."; exit 1; }
+
+      - name: Install envsubst
+        run: |
+          command -v envsubst >/dev/null 2>&1 && echo "envsubst present" \
+            || { echo "installing gettext-base"; sudo apt-get update && sudo apt-get install -y gettext-base; }
+
+      # An unset secret makes envsubst emit `X-Gateway-Secret:` with a null value. kubectl
+      # apply exits 0 (the CRD schema is permissive) and the route then fails to sync to
+      # APISIX — calls 404 rather than returning a clean 401. Fail before touching anything.
+      - name: Require gateway secrets
+        env:
+          SUWALKA_AI_GATEWAY_SECRET: ${{ secrets.SUWALKA_AI_GATEWAY_SECRET }}
+          ZIMMA_GATEWAY_SECRET: ${{ secrets.ZIMMA_GATEWAY_SECRET }}
+        run: |
+          set -euo pipefail
+          for v in SUWALKA_AI_GATEWAY_SECRET ZIMMA_GATEWAY_SECRET; do
+            [[ -n "${!v:-}" ]] || { echo "::error::$v is unset — envsubst would emit a null header and the route would 404, not 401."; exit 1; }
+          done
+
+      - name: Render routes (envsubst)
+        env:
+          SUWALKA_AI_GATEWAY_SECRET: ${{ secrets.SUWALKA_AI_GATEWAY_SECRET }}
+          ZIMMA_GATEWAY_SECRET: ${{ secrets.ZIMMA_GATEWAY_SECRET }}
+        run: |
+          set -euo pipefail
+          mkdir -p .rendered
+          for f in routes/*.yaml; do
+            envsubst '$SUWALKA_AI_GATEWAY_SECRET $ZIMMA_GATEWAY_SECRET' < "$f" > ".rendered/$(basename "$f")"
+          done
+          echo "rendered $(ls .rendered | wc -l) files"
+
+      # Refuse to apply anything whose declared namespace has no matching serving object.
+      # This is what stops a file from creating a competing duplicate instead of updating
+      # the route it was meant to update.
+      - name: Guard — declared namespace must hold the object it claims
+        run: |
+          set -uo pipefail
+          : > /tmp/objs.tsv
+          for f in .rendered/*.yaml; do
+            python3 -c "import yaml,sys;[print('%s\t%s\t%s'%(d['metadata'].get('namespace','default'),d['metadata']['name'],d.get('kind'))) for d in yaml.safe_load_all(open(sys.argv[1])) if d and d.get('metadata')]" "$f" \
+              | sed "s|^|$(basename "$f")\t|" >> /tmp/objs.tsv
+          done
+          bad=0
+          while IFS=$'\t' read -r file ns name kind; do
+            [ "$kind" = "ApisixRoute" ] || continue
+            kubectl -n "$ns" get apisixroute "$name" >/dev/null 2>&1 && continue
+            other=$(kubectl get apisixroute -A -o jsonpath="{range .items[?(@.metadata.name=='$name')]}{.metadata.namespace} {end}" 2>/dev/null || true)
+            if [ -n "${other// /}" ]; then
+              echo "::error file=routes/$file::declares namespace '$ns' but '$name' actually serves from: $other. Applying would create a competing duplicate, not update the live route. Reconcile the namespace first."
+              bad=1
+            else
+              echo "::notice file=routes/$file::'$name' does not exist in '$ns' yet — this apply would CREATE it."
+            fi
+          done < /tmp/objs.tsv
+          [ "$bad" -eq 0 ] || { echo "::error::Namespace guard failed — see annotations."; exit 1; }
+
+      # kubectl diff is read-only (server-side dry-run). Exit 1 means drift, which is
+      # information, not failure — so it is captured rather than allowed to kill the job.
+      - name: Plan — kubectl diff every route file
+        id: plan
+        run: |
+          set -uo pipefail
+          drift=0
+          : > /tmp/plan.txt
+          for f in .rendered/*.yaml; do
+            out=$(kubectl diff -f "$f" 2>&1); rc=$?
+            if [[ $rc -ne 0 && -n "$out" ]]; then
+              drift=1
+              { echo "### $(basename "$f")"; echo '```diff'; echo "$out"; echo '```'; } >> /tmp/plan.txt
+            fi
+          done
+          if [[ $drift -eq 0 ]]; then
+            echo "No drift — every route file already matches the cluster." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            { echo "## Route drift vs sfg-prod"; cat /tmp/plan.txt; } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::routes/ has drifted from the cluster — review the job summary before applying."
+          fi
+          echo "drift=$drift" >> "$GITHUB_OUTPUT"
+
+      - name: Apply
+        if: env.MODE == 'apply'
+        run: |
+          set -euo pipefail
+          for f in .rendered/*.yaml; do
+            echo "--> applying $(basename "$f")"
+            kubectl apply -f "$f"
+          done
+
+      - name: Report route state
+        if: always()
+        run: kubectl get apisixroute -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,RULES:.spec.http[*].name' || true
+
+      # The runner workspace PERSISTS between jobs on a box shared across the estate, and this
+      # kubeconfig is cluster-admin. Removing it is the entire reason self-hosted is safe here.
+      - name: Scrub the kubeconfig
+        if: always()
+        run: |
+          rm -f "$KUBECONFIG" .rendered/*.yaml || true
+          if [[ -e "$KUBECONFIG" ]]; then
+            echo "::error::Failed to remove kubeconfig from a persistent runner workspace."; exit 1
+          fi
+          echo "kubeconfig scrubbed."
