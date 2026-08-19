@@ -1,0 +1,29 @@
+# TLS for both NMA India hosts, issued via cert-manager — same pattern as
+# suwalka-faithandgamble-tls in routes/admin-web.yaml.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nma-india-tls
+  namespace: nma-india
+spec:
+  secretName: nma-india-tls
+  dnsNames:
+    - api.nomainaudit.com
+    - app.nomainaudit.com
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: nma-india
+  namespace: nma-india
+spec:
+  ingressClassName: apisix
+  hosts:
+    - api.nomainaudit.com
+    - app.nomainaudit.com
+  secret:
+    name: nma-india-tls
+    namespace: nma-india
