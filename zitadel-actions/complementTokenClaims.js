@@ -2,7 +2,8 @@
  * Zitadel Action — Complement Token flow, "Pre Userinfo creation" trigger.
  *
  * Mints suwalka_admin / suwalka_caps / suwalka_identity / suwalka_outlet_set /
- * suwalka_dept_set custom claims into the userinfo response (which APISIX's
+ * suwalka_dept_set / suwalka_grant_caps / suwalka_levels custom claims into the
+ * userinfo response (which APISIX's
  * openid-connect plugin forwards to every backend service as the base64 JSON
  * X-Userinfo header, decoded by @suwalka/common's readUser()).
  *
@@ -75,5 +76,30 @@ function complementTokenClaims(ctx, api) {
   }
   if (result.suwalka_dept_set && result.suwalka_dept_set.length) {
     api.v1.claims.setClaim('suwalka_dept_set', result.suwalka_dept_set);
+  }
+
+  // suwalka_grant_caps — the per-grant permission matrix (2026-08-03).
+  //
+  // DO NOT add a `.length` guard here. This claim is THREE-state and the empty
+  // array is a real, meaningful value:
+  //   absent    -> "pre-matrix": the grant is NOT narrowed. Fail-OPEN, and
+  //                deliberately so, only so a stale token does not lose access.
+  //   []        -> "this caller's grants cover nothing".
+  //   [ ...  ]  -> the matrix.
+  // Dropping [] would make it absent, i.e. turn "covers nothing" into
+  // "covers everything" — the exact inversion readUser's parser warns about.
+  // Send it whenever org-hr sent an array; org-hr sends null for pre-matrix.
+  if (Array.isArray(result.suwalka_grant_caps)) {
+    api.v1.claims.setClaim('suwalka_grant_caps', result.suwalka_grant_caps);
+  }
+
+  // suwalka_levels — the permission-LEVEL axis, approve/delete (#648, 2026-08-27).
+  //
+  // Also no `.length` guard, for the opposite reason: on this axis an absent
+  // claim means DENY, never "everything". Setting it unconditionally keeps the
+  // claim's presence a signal that this Action is current, rather than making an
+  // undeployed Action indistinguishable from a caller who holds no levels.
+  if (Array.isArray(result.suwalka_levels)) {
+    api.v1.claims.setClaim('suwalka_levels', result.suwalka_levels);
   }
 }
