@@ -4,30 +4,35 @@
 # nobody hand-copies a secret.
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# THIS SCRIPT IS BLOCKED UNTIL A ROLE IS GRANTED. READ THIS FIRST.
+# UNBLOCKED 2026-08-27 — AND THE TARGET CHANGED. READ THIS.
 # ═══════════════════════════════════════════════════════════════════════════
-# Measured 2026-08-26 against https://sfg-labs.faithandgamble.in with the
-# `mgmt-pat` from `sfg-pos-app/suwalka-auth-secrets`:
+# The blocker was never a missing role on suwalka-auth's `mgmt-pat`; it was that
+# no credential in the cluster had Actions rights. `sfg-gateway/iam-admin-pat`
+# now does — actions/_search, flows/2 and orgs/me/members/_search all 200.
 #
-#   POST /management/v1/users/_search        200   <- works
-#   GET  /management/v1/orgs/me              200   <- works
-#   POST /management/v1/projects/_search     200   <- works
-#   POST /management/v1/orgs/me/members/_search  403 AUTH-5mWD2
-#   POST /management/v1/actions/_search      403 AUTH-5mWD2
-#   GET  /management/v1/flows/2              403 AUTH-5mWD2
+# Inspecting the live instance then changed what this script should do:
 #
-# 403, not 401 — the PAT authenticates; the service account simply holds user
-# and project rights (all `suwalka-auth` ever needed) and neither Actions nor
-# Flows. `service-account-token` in the same secret gives the identical 403.
+#   setIdentityClaims       resolver-backed, calls org-hr's admin-grants/by-sub,
+#                           and writes ONLY `api.v1.claims.setClaim` — which is
+#                           the TOKEN surface. It therefore contributes NOTHING
+#                           to userinfo, and APISIX base64s only userinfo into
+#                           X-Userinfo. This file is its successor.
 #
-# It also cannot grant itself the role: org member management is 403 too. So
-# this needs one action from a Zitadel ORG_OWNER:
+#   complementTokenClaims   a DIFFERENT action that mirrors Zitadel user
+#                           METADATA via `api.v1.userinfo.setClaim`. It is the
+#                           only thing currently injecting the top-level `roles`
+#                           claim, which assertRole() gates OWNER_GM/BSM_TL
+#                           writes on. DO NOT OVERWRITE IT — despite the name
+#                           collision with this repo's file.
 #
-#   Zitadel console -> Organisation -> Managers -> the suwalka-auth service
-#   account -> add a role that covers action.write / flow.write (ORG_OWNER is
-#   the blunt option; a custom role is tidier).
+# Measured on a real login (superadmin@suwalka.demo), userinfo carried:
+#   suwalka_admin / suwalka_caps / suwalka_identity / roles   PRESENT
+#   suwalka_outlet_set / suwalka_dept_set                     ABSENT
+#   suwalka_grant_caps / suwalka_levels                       ABSENT
 #
-# Once that is done this script runs unattended and is idempotent.
+# So #648 is confirmed, and two further claims `readUser()` parses have never
+# been minted either — `suwalka_outlet_set` was renamed from
+# `suwalka_branch_set` and the Action never followed.
 #
 # ═══════════════════════════════════════════════════════════════════════════
 # WHAT IT DOES
@@ -54,7 +59,13 @@ set -euo pipefail
 KC=${KUBECONFIG_PATH:-~/.kube/sfg-prod.kubeconfig}
 NS=${NS:-sfg-pos-app}
 SEC=${SEC:-suwalka-auth-secrets}
-ACTION_NAME=${ACTION_NAME:-suwalkaComplementTokenClaims}
+# `setIdentityClaims`, NOT `complementTokenClaims`. Measured on the live
+# instance 2026-08-27: `setIdentityClaims` is the resolver-backed action this
+# file is the successor to. `complementTokenClaims` is a DIFFERENT action that
+# mirrors Zitadel user METADATA and is the only thing currently injecting the
+# top-level `roles` claim, which assertRole() gates OWNER_GM/BSM_TL writes on.
+# Deploying under that name would overwrite it and break those writes.
+ACTION_NAME=${ACTION_NAME:-setIdentityClaims}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HERE/complementTokenClaims.js"
 DRY_RUN=0
@@ -63,7 +74,14 @@ DRY_RUN=0
 [ -f "$SRC" ] || { echo "missing $SRC" >&2; exit 1; }
 
 ISSUER=$(kubectl --kubeconfig "$KC" -n "$NS" get secret "$SEC" -o jsonpath='{.data.zitadel-issuer}' | base64 -d)
-PAT=$(kubectl --kubeconfig "$KC" -n "$NS" get secret "$SEC" -o jsonpath='{.data.mgmt-pat}' | base64 -d)
+# suwalka-auth's mgmt-pat can read users and projects but 403s on Actions and
+# Flows. The iam-admin PAT is the one with the rights — verified against
+# actions/_search, flows/2 and orgs/me/members/_search, all 200.
+PAT=$(kubectl --kubeconfig "$KC" -n sfg-gateway get secret iam-admin-pat -o jsonpath='{.data.pat}' 2>/dev/null | base64 -d)
+if [ -z "$PAT" ]; then
+  PAT=$(kubectl --kubeconfig "$KC" -n "$NS" get secret "$SEC" -o jsonpath='{.data.mgmt-pat}' | base64 -d)
+  echo "note: falling back to mgmt-pat, which 403s on Actions — expect the precheck to stop this run"
+fi
 IGT=$(kubectl --kubeconfig "$KC" -n "$NS" get secret "$SEC" -o jsonpath='{.data.internal-grant-token}' | base64 -d)
 
 [ -n "$ISSUER" ] && [ -n "$PAT" ] && [ -n "$IGT" ] || { echo "a secret came back empty — aborting" >&2; exit 1; }
@@ -134,12 +152,38 @@ fi
 [ -n "$ACTION_ID" ] || { echo "no action id returned:"; cat /tmp/zaction.json; exit 1; }
 echo "action id: $ACTION_ID"
 
-# Flow 2 = COMPLEMENT_TOKEN, trigger 3 = PRE_USERINFO_CREATION. Setting the
-# trigger REPLACES its action list, so include every action that should run.
+# Flow 2 = COMPLEMENT_TOKEN, trigger 3 = PRE_USERINFO_CREATION.
+#
+# SETTING A TRIGGER REPLACES ITS ENTIRE ACTION LIST. The live trigger carries
+# TWO actions, and the other one (`complementTokenClaims`) is the only thing
+# injecting the top-level `roles` claim. Posting just this action's id would
+# silently detach it and break every OWNER_GM/BSM_TL write that assertRole()
+# gates — with no error, because the flow would still be valid.
+#
+# So: read what is attached, union in this action, preserve order, write back.
+CURRENT=$(curl -s "$ISSUER/management/v1/flows/2" -H "Authorization: Bearer $PAT")
+IDS=$(ACTION_ID="$ACTION_ID" python3 -c "
+import json, os, sys
+flow = (json.load(sys.stdin).get('flow') or {})
+want = os.environ['ACTION_ID']
+ids = []
+for ta in flow.get('triggerActions') or []:
+    tt = (ta.get('triggerType') or {}).get('key','')
+    if 'PreUserinfoCreation' not in tt:
+        continue
+    for a in ta.get('actions') or []:
+        if a.get('id') and a['id'] not in ids:
+            ids.append(a['id'])
+if want not in ids:
+    ids.append(want)
+print(json.dumps(ids))
+" <<<"$CURRENT")
+echo "trigger will carry: $IDS"
+
 curl -s -o /tmp/ztrigger.json -w 'attach trigger: HTTP %{http_code}\n' -X POST \
   "$ISSUER/management/v1/flows/2/trigger/3" \
   -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
-  -d "{\"actionIds\":[\"$ACTION_ID\"]}"
+  -d "{\"actionIds\":$IDS}"
 
 cat <<'EOF'
 

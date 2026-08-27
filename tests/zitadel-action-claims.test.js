@@ -35,6 +35,10 @@ Module._load = function (request, parent, isMain) {
   }
   return originalLoad.apply(this, arguments);
 };
+// The stub above is what every check except the throwing one needs. Keep a
+// handle so that check can put THIS back — restoring `originalLoad` instead
+// removes the zitadel/* stub too, and every later require fails.
+const stubLoad = Module._load;
 
 // The file declares a bare function and is pasted into a console, so it has no
 // exports. Evaluate it and hand back the function.
@@ -47,13 +51,36 @@ function loadAction() {
 
 const complementTokenClaims = loadAction();
 
-function run(result, { status = 200 } = {}) {
+/**
+ * Returns the USERINFO surface, deliberately.
+ *
+ * `api.v1.claims.setClaim` writes the TOKEN's claims. `api.v1.userinfo.setClaim`
+ * writes the userinfo response — and APISIX base64s ONLY the userinfo response
+ * into `X-Userinfo`, which is the only thing `readUser()` ever sees. An earlier
+ * version of this file stubbed just `claims`, so it asserted the surface no
+ * backend reads, and would have passed on an Action that delivered nothing.
+ *
+ * That is not hypothetical: the live `setIdentityClaims` was in exactly that
+ * state — attached, ACTIVE, calling only `claims.setClaim`, contributing
+ * nothing to userinfo — for weeks.
+ */
+function runBoth(result, { status = 200 } = {}) {
   nextResponse = { status, json: () => ({ result }) };
-  const set = {};
-  const api = { v1: { claims: { setClaim: (k, v) => { set[k] = v; } } } };
+  const userinfo = {};
+  const claims = {};
+  const api = {
+    v1: {
+      userinfo: { setClaim: (k, v) => { userinfo[k] = v; } },
+      claims: { setClaim: (k, v) => { claims[k] = v; } },
+    },
+  };
   const ctx = { v1: { getUser: () => ({ id: 'sub-1' }) } };
   complementTokenClaims(ctx, api);
-  return set;
+  return { userinfo, claims };
+}
+
+function run(result, opts) {
+  return runBoth(result, opts).userinfo;
 }
 
 const checks = [];
@@ -135,8 +162,63 @@ check('a fetch that throws does not block login', () => {
     return originalLoad.apply(this, arguments);
   };
   const fresh = loadAction();
-  assert.doesNotThrow(() => fresh(ctx, api));
-  assert.deepStrictEqual(set, {});
+  try {
+    assert.doesNotThrow(() => fresh(ctx, api));
+    assert.deepStrictEqual(set, {});
+  } finally {
+    // RESTORE. This check replaces the module loader globally, and without
+    // putting it back every later check runs against a fetch that throws — so
+    // they observe no claims and fail for a reason that has nothing to do with
+    // what they assert. Found when two checks appended after this one failed
+    // with an empty claim set.
+    Module._load = stubLoad;
+  }
+});
+
+// --- BOTH surfaces, because only one of them reaches a backend ---
+
+check('every claim lands on the USERINFO surface, which is what X-Userinfo carries', () => {
+  const { userinfo } = runBoth({
+    suwalka_admin: ['super'],
+    suwalka_caps: ['hrms:org'],
+    suwalka_identity: { employeeId: 'e1' },
+    suwalka_outlet_set: ['o1'],
+    suwalka_dept_set: ['d1'],
+    suwalka_grant_caps: [],
+    suwalka_levels: [],
+  });
+  for (const key of ['suwalka_admin', 'suwalka_caps', 'suwalka_identity',
+                     'suwalka_outlet_set', 'suwalka_dept_set',
+                     'suwalka_grant_caps', 'suwalka_levels']) {
+    assert.ok(key in userinfo, `${key} never reached userinfo — X-Userinfo would not carry it`);
+  }
+});
+
+check('the token surface receives exactly the same set — neither is favoured', () => {
+  const payload = {
+    suwalka_admin: ['super'],
+    suwalka_caps: ['hrms:org'],
+    suwalka_grant_caps: [{ module: 'hrms', scope: 'org' }],
+    suwalka_levels: [{ module: 'hrms', level: 'approve' }],
+  };
+  const { userinfo, claims } = runBoth(payload);
+  assert.deepStrictEqual(Object.keys(userinfo).sort(), Object.keys(claims).sort());
+  for (const k of Object.keys(userinfo)) assert.deepStrictEqual(claims[k], userinfo[k]);
+});
+
+check('one surface throwing does not suppress the other', () => {
+  // On a trigger where only one surface exists, Zitadel throws on the other.
+  // A single try around both would silently drop the one that WAS available.
+  nextResponse = { status: 200, json: () => ({ result: { suwalka_caps: ['hrms:org'] } }) };
+  const claims = {};
+  const api = {
+    v1: {
+      userinfo: { setClaim: () => { throw new Error('no userinfo on this trigger'); } },
+      claims: { setClaim: (k, v) => { claims[k] = v; } },
+    },
+  };
+  complementTokenClaims({ v1: { getUser: () => ({ id: 'sub-1' }) } }, api);
+  assert.deepStrictEqual(claims.suwalka_caps, ['hrms:org']);
 });
 
 let failed = 0;

@@ -62,20 +62,48 @@ function complementTokenClaims(ctx, api) {
   var result = body && body.result;
   if (!result) return;
 
+  // ── WRITE TO BOTH SURFACES. THIS IS THE WHOLE FIX. ──────────────────────
+  //
+  // Measured against the live instance on 2026-08-27, not inferred:
+  //
+  //   * `api.v1.claims.setClaim`   -> the TOKEN's claims.
+  //   * `api.v1.userinfo.setClaim` -> the USERINFO response.
+  //
+  // APISIX's openid-connect plugin base64s the USERINFO response into the
+  // `X-Userinfo` header, which is the only thing `readUser()` ever sees. So an
+  // Action that calls only `claims.setClaim` deploys cleanly, reports success,
+  // and delivers nothing to any backend.
+  //
+  // That is exactly the state the live `setIdentityClaims` was in: attached to
+  // both triggers, ACTIVE, calling only `claims.setClaim` — and contributing
+  // nothing. Every claim that DID arrive came from the separate
+  // `complementTokenClaims` action, which mirrors Zitadel user METADATA and
+  // uses `userinfo.setClaim`. The proof is in the userinfo response itself:
+  // it carries `urn:zitadel:iam:action:complementTokenClaims:log` and no
+  // `setIdentityClaims` log key at all.
+  //
+  // Each call is wrapped separately: on a trigger where one surface is not
+  // available, Zitadel throws, and a single try around both would silently
+  // drop the surface that WAS available.
+  function setBoth(key, value) {
+    try { api.v1.userinfo.setClaim(key, value); } catch (e) { /* surface absent on this trigger */ }
+    try { api.v1.claims.setClaim(key, value); } catch (e) { /* surface absent on this trigger */ }
+  }
+
   if (result.suwalka_admin && result.suwalka_admin.length) {
-    api.v1.claims.setClaim('suwalka_admin', result.suwalka_admin);
+    setBoth('suwalka_admin', result.suwalka_admin);
   }
   if (result.suwalka_caps && result.suwalka_caps.length) {
-    api.v1.claims.setClaim('suwalka_caps', result.suwalka_caps);
+    setBoth('suwalka_caps', result.suwalka_caps);
   }
   if (result.suwalka_identity) {
-    api.v1.claims.setClaim('suwalka_identity', result.suwalka_identity);
+    setBoth('suwalka_identity', result.suwalka_identity);
   }
   if (result.suwalka_outlet_set && result.suwalka_outlet_set.length) {
-    api.v1.claims.setClaim('suwalka_outlet_set', result.suwalka_outlet_set);
+    setBoth('suwalka_outlet_set', result.suwalka_outlet_set);
   }
   if (result.suwalka_dept_set && result.suwalka_dept_set.length) {
-    api.v1.claims.setClaim('suwalka_dept_set', result.suwalka_dept_set);
+    setBoth('suwalka_dept_set', result.suwalka_dept_set);
   }
 
   // suwalka_grant_caps — the per-grant permission matrix (2026-08-03).
@@ -90,7 +118,7 @@ function complementTokenClaims(ctx, api) {
   // "covers everything" — the exact inversion readUser's parser warns about.
   // Send it whenever org-hr sent an array; org-hr sends null for pre-matrix.
   if (Array.isArray(result.suwalka_grant_caps)) {
-    api.v1.claims.setClaim('suwalka_grant_caps', result.suwalka_grant_caps);
+    setBoth('suwalka_grant_caps', result.suwalka_grant_caps);
   }
 
   // suwalka_levels — the permission-LEVEL axis, approve/delete (#648, 2026-08-27).
@@ -100,6 +128,6 @@ function complementTokenClaims(ctx, api) {
   // claim's presence a signal that this Action is current, rather than making an
   // undeployed Action indistinguishable from a caller who holds no levels.
   if (Array.isArray(result.suwalka_levels)) {
-    api.v1.claims.setClaim('suwalka_levels', result.suwalka_levels);
+    setBoth('suwalka_levels', result.suwalka_levels);
   }
 }
