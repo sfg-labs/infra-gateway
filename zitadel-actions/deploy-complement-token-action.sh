@@ -102,14 +102,34 @@ fi
 
 # Build the script body with the token substituted. Done in python via stdin so
 # the secret is never an argv entry (argv is world-readable in /proc).
-BODY=$(SRC="$SRC" python3 - <<'PY'
-import json, os, sys
+BODY=$(SRC="$SRC" ACTION_NAME="$ACTION_NAME" python3 - <<'PY'
+import json, os, re, sys
 src = open(os.environ['SRC']).read()
 token = sys.stdin.read().strip()
 placeholder = "'<set-me-in-the-zitadel-console-only>'"
 if placeholder not in src:
     print("PLACEHOLDER_MISSING", file=sys.stderr); raise SystemExit(1)
-print(json.dumps(src.replace(placeholder, json.dumps(token))))
+src = src.replace(placeholder, json.dumps(token))
+
+# ZITADEL INVOKES THE FUNCTION WHOSE NAME MATCHES THE ACTION NAME.
+#
+# The live script carried the instruction in its own header — "Name MUST be
+# exactly: setIdentityClaims" — and it is not decoration. Deploying a body that
+# declares `function complementTokenClaims` under an action named
+# `setIdentityClaims` stores fine, returns 200, and then never runs: Zitadel
+# looks for a function called `setIdentityClaims`, finds none, and silently does
+# nothing. No error, no log key in the userinfo response, no claims.
+#
+# I did exactly that on the first deploy attempt. So the declaration is renamed
+# to the action name at deploy time, rather than relying on the file happening
+# to be called the right thing.
+action_name = os.environ['ACTION_NAME']
+src, n = re.subn(r'\bfunction\s+complementTokenClaims\s*\(', f'function {action_name}(', src)
+if n != 1:
+    print(f'expected exactly one function declaration to rename, found {n}', file=sys.stderr)
+    raise SystemExit(1)
+
+print(json.dumps(src))
 PY
 <<<"$IGT")
 
@@ -120,20 +140,20 @@ fi
 
 EXISTING=$(curl -s -X POST "$ISSUER/management/v1/actions/_search" \
   -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d '{}' \
-  | python3 -c "
+  | ACTION_NAME="$ACTION_NAME" python3 -c "
 import json,sys,os
 d=json.load(sys.stdin)
 name=os.environ['ACTION_NAME']
 print(next((a['id'] for a in (d.get('result') or []) if a.get('name')==name), ''))
-" ACTION_NAME="$ACTION_NAME" 2>/dev/null || true)
+" 2>/dev/null || true)
 
-PAYLOAD=$(python3 -c "
+PAYLOAD=$(ACTION_NAME="$ACTION_NAME" python3 -c "
 import json,sys,os
 print(json.dumps({'name': os.environ['ACTION_NAME'],
                   'script': json.loads(sys.stdin.read()),
                   'timeout': '10s',
                   'allowedToFail': True}))
-" ACTION_NAME="$ACTION_NAME" <<<"$BODY")
+" <<<"$BODY")
 
 if [ -n "$EXISTING" ]; then
   echo "updating existing action $EXISTING"
