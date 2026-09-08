@@ -22,7 +22,7 @@ spec:
   - name: suwalka-inventory-pricing-uat-api
     match:
       hosts:
-      - api-uat.suwalka-pos.sfg-labs.in
+      - api-uat.faithandgamble.in
       paths:
       - /api/inventory-pricing/*
       methods:

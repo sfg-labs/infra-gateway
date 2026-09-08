@@ -25,7 +25,7 @@ spec:
   - name: suwalka-notification-uat-api
     match:
       hosts:
-      - api-uat.suwalka-pos.sfg-labs.in
+      - api-uat.faithandgamble.in
       paths:
       - /api/notification/*
       - /api/notify/*
@@ -79,7 +79,6 @@ spec:
     match:
       hosts:
       - api-uat.faithandgamble.in
-      - api-uat.suwalka-pos.sfg-labs.in
       paths:
       - /notify/*
       methods:
