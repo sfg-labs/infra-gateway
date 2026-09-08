@@ -1,0 +1,73 @@
+# UAT mirror of routes/suwalka-platform.yaml — same auth/rate-limit posture, UAT host + namespace.
+# See that file for the detailed rationale behind these plugin settings (rate limits,
+# CORS, source-IP-attribution caveats etc.) — not duplicated here to avoid drift between
+# two copies of the same forensic notes. If you tighten/loosen a setting here, mirror it
+# there too (and vice versa) unless the change is UAT-specific on purpose.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-platform-uat
+  namespace: sfg-labs-uat
+  labels:
+    sfg-project: suwalka
+    sfg-env: uat
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — Platform service (audit log + documents) (UAT)"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "suwalka-platform:3002"
+spec:
+  ingressClassName: apisix
+  http:
+  - name: suwalka-platform-uat-api
+    match:
+      hosts:
+      - api-uat.suwalka-pos.sfg-labs.in
+      paths:
+      - /api/platform/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: suwalka-platform
+      servicePort: 3002
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka
+            X-Env: uat

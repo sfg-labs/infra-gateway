@@ -2,9 +2,17 @@
 # Helm release or route. Declarative so they are version-controlled and reviewable —
 # unlike Secrets, which must be created imperatively from GitHub Secrets at deploy time.
 #
-#   sfg-gateway — APISIX, Zitadel, the ingress controller, and Zitadel's Postgres
-#   sfg-apps    — NMA / Baithak / CMS backend pods
-#   sfg-labs    — Suwalka Motors backend pods (see routes/suwalka-*.yaml)
+#   sfg-gateway  — APISIX, Zitadel, the ingress controller, and Zitadel's Postgres
+#   sfg-apps     — NMA / Baithak / CMS backend pods
+#   sfg-labs     — Suwalka Motors backend pods, PRODUCTION (see routes/suwalka-*.yaml)
+#   sfg-labs-uat — Suwalka Motors backend pods, UAT (see routes/suwalka-*-uat.yaml)
+#
+# sfg-labs-uat is namespace-isolated from sfg-labs by design: its own Postgres/
+# Redis/RabbitMQ (never prod's), its own Secrets, its own Deployments. The APISIX
+# ingress controller only routes to Services in a route's OWN namespace (see the
+# NAMESPACE NOTE in routes/suwalka-org-hr-payroll.yaml), so UAT ApisixRoute objects
+# also live in sfg-labs-uat, not sfg-labs. The gateway itself (APISIX, Zitadel) is
+# shared — this namespace does not duplicate it.
 ---
 apiVersion: v1
 kind: Namespace
@@ -29,3 +37,12 @@ metadata:
   labels:
     app.kubernetes.io/part-of: sfg-gateway
     sfg-labs.in/tier: backend
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sfg-labs-uat
+  labels:
+    app.kubernetes.io/part-of: sfg-gateway
+    sfg-labs.in/tier: backend
+    sfg-labs.in/env: uat

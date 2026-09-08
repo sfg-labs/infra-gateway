@@ -1,0 +1,415 @@
+# UAT mirror of routes/suwalka-ai-services.yaml — same three caller shapes (human JWT,
+# peer-service X-Internal-Token, tenant API key sk-suwalka-...), same /ai-service/*
+# prefix aliasing, health/docs surfaces. See that file for the full auth-nuance
+# writeup (suwalka-ai-services/docs/deployment.md §5).
+#
+# The JWT rule below injects X-Gateway-Secret via proxy-rewrite, substituted at deploy
+# time by envsubst in helm/deploy.sh from the SUWALKA_AI_GATEWAY_SECRET_UAT GitHub
+# Secret — DISTINCT from prod's SUWALKA_AI_GATEWAY_SECRET, so a UAT credential
+# leak/rotation can never affect prod trust. helm/deploy.sh and .github/workflows/cd.yaml
+# already wire this through (see the *-uat.yaml case added there in this same change).
+#
+# BEFORE FIRST DEPLOY: create the SUWALKA_AI_GATEWAY_SECRET_UAT GitHub Secret (repo
+# Settings → Secrets and variables → Actions) with its own random value — do not reuse
+# SUWALKA_AI_GATEWAY_SECRET. deploy.sh hard-fails before touching the cluster if it's
+# unset, but a mistakenly-equal value would silently defeat the isolation this exists for.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-ai-services-uat
+  namespace: sfg-labs-uat
+  labels:
+    sfg-project: suwalka
+    sfg-env: uat
+    sfg-service: ai-resume-screening
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka AI Services — Resume Screening API (UAT)"
+    sfg-labs.in/team: "ai-services"
+    sfg-labs.in/upstream: "suwalka-ai-services:3012"
+spec:
+  ingressClassName: apisix
+  http:
+  - name: suwalka-ai-services-uat-m2m-internal-token
+    priority: 10
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      exprs:
+      - subject:
+          scope: Header
+          name: X-Internal-Token
+        op: RegexMatch
+        value: ".+"
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+            X-Env: uat
+
+  - name: suwalka-ai-services-uat-m2m-api-key
+    priority: 10
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      exprs:
+      - subject:
+          scope: Header
+          name: Authorization
+        op: RegexMatch
+        value: "^Bearer sk-suwalka-"
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+            X-Env: uat
+
+  - name: suwalka-ai-services-uat-api-jwt
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway-Secret: ${SUWALKA_AI_GATEWAY_SECRET_UAT}
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka-uat.faithandgamble.in"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+            X-Env: uat
+
+  - name: suwalka-ai-services-uat-health
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /healthz
+      - /readyz
+      methods:
+      - GET
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  - name: suwalka-ai-services-uat-docs
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /ai-service/docs
+      - /ai-service/redoc
+      - /ai-service/openapi.json
+      methods:
+      - GET
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  - name: suwalka-ai-services-uat-prefixed-m2m-internal-token
+    priority: 10
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /ai-service/v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      exprs:
+      - subject:
+          scope: Header
+          name: X-Internal-Token
+        op: RegexMatch
+        value: ".+"
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+            X-Env: uat
+
+  - name: suwalka-ai-services-uat-prefixed-m2m-api-key
+    priority: 10
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /ai-service/v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      exprs:
+      - subject:
+          scope: Header
+          name: Authorization
+        op: RegexMatch
+        value: "^Bearer sk-suwalka-"
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+            X-Env: uat
+
+  - name: suwalka-ai-services-uat-prefixed-api-jwt
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /ai-service/v1/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-ai-services
+      servicePort: 3012
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - "^/ai-service(.*)"
+        - "$1"
+        headers:
+          set:
+            X-Gateway-Secret: ${SUWALKA_AI_GATEWAY_SECRET_UAT}
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka-uat.faithandgamble.in"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 80
+        burst: 40
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka-ai-services
+            X-Env: uat

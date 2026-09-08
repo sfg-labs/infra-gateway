@@ -1,0 +1,178 @@
+# UAT mirror of routes/suwalka-auth.yaml — same three rules (public login/refresh/
+# logout/docs, JWT-protected /auth/admin/*, and the tightly-rate-limited
+# /auth/password/change), same CORS/rate-limit posture, UAT host + namespace.
+#
+# See routes/suwalka-auth.yaml for the full rationale behind every rate-limit and
+# CORS value here (source-IP SNAT collapsing remote_addr, Zitadel lockout being
+# unset, the leaky-bucket rate/burst semantics, the CORS drift history) — not
+# duplicated here to avoid two copies of the same forensic notes going stale
+# independently. Mirror any deliberate change there here too, unless it is UAT-only
+# on purpose (e.g. a looser limit to avoid throttling parallel test runs).
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-uat-faithandgamble-tls
+  namespace: sfg-labs-uat
+spec:
+  secretName: api-uat-faithandgamble-tls
+  dnsNames:
+    - api-uat.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: api-uat-faithandgamble
+  namespace: sfg-labs-uat
+spec:
+  ingressClassName: apisix
+  hosts:
+    - api-uat.faithandgamble.in
+  secret:
+    name: api-uat-faithandgamble-tls
+    namespace: sfg-labs-uat
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-auth-uat
+  namespace: sfg-labs-uat
+  labels:
+    sfg-project: suwalka
+    sfg-env: uat
+    sfg-auth: mixed
+spec:
+  ingressClassName: apisix
+  http:
+    - name: suwalka-auth-uat-public
+      match:
+        hosts:
+          - api-uat.faithandgamble.in
+        paths:
+          - /auth/login
+          - /auth/refresh
+          - /auth/logout
+          - /auth/docs
+          - /auth/docs/*
+        methods: [GET, POST, OPTIONS]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
+            max_age: 3600
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+                X-Env: uat
+        - name: limit-req
+          enable: true
+          config:
+            rate: 30
+            burst: 30
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+    - name: suwalka-auth-uat-admin
+      match:
+        hosts:
+          - api-uat.faithandgamble.in
+        paths:
+          - /auth/admin/*
+        methods: [GET, POST, PUT, PATCH, DELETE]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
+            max_age: 3600
+        - name: openid-connect
+          enable: true
+          config:
+            discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+            bearer_only: true
+            realm: suwalka
+            client_id: "bearer-only-unused"
+            client_secret: "bearer-only-unused"
+            use_jwks: true
+            set_userinfo_header: true
+            userinfo_header_name: X-Userinfo
+            token_signing_alg_values_expected: RS256
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            rate: 100
+            burst: 100
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+    - name: suwalka-auth-uat-password-change
+      match:
+        hosts:
+          - api-uat.faithandgamble.in
+        paths:
+          - /auth/password/change
+          - /auth/password/change/
+        methods: [POST, OPTIONS]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
+            max_age: 3600
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            rate: 5
+            burst: 10
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+                X-Env: uat
