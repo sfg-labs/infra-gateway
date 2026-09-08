@@ -1,0 +1,126 @@
+# UAT mirror of routes/suwalka-notification.yaml — same two rules: the
+# service-to-service /api/notification|notify/* on the internal host (no CORS,
+# by design — no browser calls it), and the browser-facing in-app inbox at
+# /notify/* with the proxy-rewrite onto /api/notify/*.
+#
+# See routes/suwalka-notification.yaml for why the api rule deliberately omits
+# CORS/OPTIONS and why the inbox rule deliberately has no limit-req/response-rewrite
+# — both are "matches live", not oversights, and the same reasoning applies to UAT.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-notification-uat
+  namespace: sfg-pos-app-uat
+  labels:
+    sfg-project: suwalka
+    sfg-env: uat
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — Notification service (SMS/WhatsApp via MSG91) (UAT)"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "suwalka-notification:3007"
+spec:
+  ingressClassName: apisix
+  http:
+  - name: suwalka-notification-uat-api
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /api/notification/*
+      - /api/notify/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+    backends:
+    - serviceName: suwalka-notification
+      servicePort: 3007
+      weight: 100
+    plugins:
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka
+            X-Env: uat
+  - name: suwalka-notification-uat-inbox
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      paths:
+      - /notify/*
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-notification
+      servicePort: 3007
+      weight: 100
+    plugins:
+    - name: proxy-rewrite
+      enable: true
+      config:
+        regex_uri:
+        - ^/notify/(.*)
+        - /api/notify/$1
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "**"
+        allow_methods: "GET,POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,Accept,X-Request-Id"
+        allow_credential: true
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true

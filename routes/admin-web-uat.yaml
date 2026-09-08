@@ -1,0 +1,95 @@
+# UAT host for the Suwalka back-office admin web: suwalka-uat.faithandgamble.in
+# Shares the existing APISIX gateway LoadBalancer IP — no new IP/LB.
+# TLS is issued by cert-manager and served by APISIX (ApisixTls).
+#
+# UNLIKE admin-web-dev.yaml, this is namespace-isolated: it routes to the
+# "admin-web" Service inside sfg-pos-app-uat (own Deployment, own env pointing at
+# UAT's suwalka-org-hr-payroll/suwalka-auth/etc., own Postgres/Redis), not a
+# same-namespace sibling release. See admin-web/k8s/ (or helm/values-uat.yaml,
+# once added) for the Deployment side of this.
+#
+# Public, browser-facing Next.js app — openid-connect deliberately omitted, same
+# as prod and dev (auth happens in-app via /auth/* calls).
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: suwalka-uat-faithandgamble-tls
+  namespace: sfg-pos-app-uat
+spec:
+  secretName: suwalka-uat-faithandgamble-tls
+  dnsNames:
+    - suwalka-uat.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: suwalka-uat-faithandgamble
+  namespace: sfg-pos-app-uat
+spec:
+  ingressClassName: apisix
+  hosts:
+    - suwalka-uat.faithandgamble.in
+  secret:
+    name: suwalka-uat-faithandgamble-tls
+    namespace: sfg-pos-app-uat
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: admin-web-uat
+  namespace: sfg-pos-app-uat
+  labels:
+    sfg-project: suwalka
+    sfg-env: uat
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — back-office admin web (UAT environment)"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "admin-web:3000"
+spec:
+  ingressClassName: apisix
+  http:
+    - name: admin-web-uat
+      match:
+        hosts:
+          - suwalka-uat.faithandgamble.in
+        paths:
+          - /*
+        methods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+          - HEAD
+      backends:
+        - serviceName: admin-web
+          servicePort: 3000
+          weight: 100
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            rate: 200
+            burst: 200
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+                X-Env: uat
