@@ -3,7 +3,7 @@
 # TLS is issued by cert-manager and served by APISIX (ApisixTls).
 #
 # UNLIKE admin-web-dev.yaml, this is namespace-isolated: it routes to the
-# "admin-web" Service inside sfg-labs-uat (own Deployment, own env pointing at
+# "admin-web" Service inside sfg-pos-app-uat (own Deployment, own env pointing at
 # UAT's suwalka-org-hr-payroll/suwalka-auth/etc., own Postgres/Redis), not a
 # same-namespace sibling release. See admin-web/k8s/ (or helm/values-uat.yaml,
 # once added) for the Deployment side of this.
@@ -15,7 +15,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: suwalka-uat-faithandgamble-tls
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
 spec:
   secretName: suwalka-uat-faithandgamble-tls
   dnsNames:
@@ -28,20 +28,20 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixTls
 metadata:
   name: suwalka-uat-faithandgamble
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
 spec:
   ingressClassName: apisix
   hosts:
     - suwalka-uat.faithandgamble.in
   secret:
     name: suwalka-uat-faithandgamble-tls
-    namespace: sfg-labs-uat
+    namespace: sfg-pos-app-uat
 ---
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: admin-web-uat
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
   labels:
     sfg-project: suwalka
     sfg-env: uat

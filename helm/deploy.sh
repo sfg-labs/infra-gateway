@@ -126,7 +126,7 @@ helm repo add apisix  https://apache.github.io/apisix-helm-chart --force-update
 helm repo add zitadel https://charts.zitadel.com                 --force-update
 helm repo update
 
-echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs, sfg-labs-uat)"
+echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs, sfg-pos-app-uat)"
 if [[ -z "${DRY_RUN}" ]]; then
   kubectl apply -f k8s/namespaces.yaml
 else
@@ -239,7 +239,7 @@ if [[ -z "${DRY_RUN}" ]]; then
     esac
   done
   kubectl -n "${NAMESPACE}" get apisixroutes
-  kubectl -n sfg-labs-uat get apisixroutes
+  kubectl -n sfg-pos-app-uat get apisixroutes
 else
   echo "    [dry-run] would apply the following route files (envsubst substitution noted where used):"
   for route in routes/*.yaml; do

@@ -7,7 +7,7 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-tasks-uat
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
   labels:
     sfg-project: suwalka
     sfg-env: uat

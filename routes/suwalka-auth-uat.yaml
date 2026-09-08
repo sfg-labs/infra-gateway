@@ -13,7 +13,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: api-uat-faithandgamble-tls
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
 spec:
   secretName: api-uat-faithandgamble-tls
   dnsNames:
@@ -26,20 +26,20 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixTls
 metadata:
   name: api-uat-faithandgamble
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
 spec:
   ingressClassName: apisix
   hosts:
     - api-uat.faithandgamble.in
   secret:
     name: api-uat-faithandgamble-tls
-    namespace: sfg-labs-uat
+    namespace: sfg-pos-app-uat
 ---
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-auth-uat
-  namespace: sfg-labs-uat
+  namespace: sfg-pos-app-uat
   labels:
     sfg-project: suwalka
     sfg-env: uat
