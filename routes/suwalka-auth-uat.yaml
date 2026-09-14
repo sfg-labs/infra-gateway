@@ -97,7 +97,11 @@ spec:
           - api-uat.faithandgamble.in
         paths:
           - /auth/admin/*
-        methods: [GET, POST, PUT, PATCH, DELETE]
+        # OPTIONS is required: admin-web calls this from another origin, so the browser
+        # sends a CORS preflight first. Without OPTIONS the rule does not match, APISIX
+        # answers 404 and the browser reports "Could not reach the server". The cors
+        # plugin answers the preflight before openid-connect runs, so no token is needed.
+        methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
       backends:
         - serviceName: suwalka-auth
           servicePort: 3000
