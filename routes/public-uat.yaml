@@ -1,6 +1,9 @@
 # Public routes for the Suwalka UAT namespace (sfg-pos-app-uat) — no JWT required.
-# UAT counterpart of the org-hr-payroll backends in routes/public.yaml: same rules, with
-# host api-uat.faithandgamble.in and https://suwalka-uat.faithandgamble.in added to CORS.
+# UAT copy of the org-hr-payroll public rules live on the dev cluster (sfg-pos-app
+# public-routes-suwalka): careers list/apply, assessment, gatepass, interview-resume and
+# gate devices — host api-uat.faithandgamble.in, https://suwalka-uat.faithandgamble.in
+# added to CORS. routes/public.yaml on this branch lacks the careers and interview-resume
+# rules; the hr-health and hr-docs rules are not carried over to UAT.
 # WARNING: Adding a path here means ANY caller can reach it unauthenticated.
 #
 # These two objects were first applied by hand on 2026-09-17 during UAT (careers page CORS
@@ -35,7 +38,7 @@ spec:
       - OPTIONS
       paths:
       - /api/recruitment/public/careers/*
-    name: suwalka-careers-public
+    name: suwalka-careers-public-uat
     plugins:
     - config:
         allow_credential: false
@@ -82,7 +85,7 @@ spec:
       - OPTIONS
       paths:
       - /api/recruitment/public/careers/jobs/*
-    name: suwalka-careers-apply-public
+    name: suwalka-careers-apply-public-uat
     plugins:
     - config:
         allow_credential: false
@@ -138,7 +141,7 @@ spec:
       - OPTIONS
       paths:
       - /api/public/assessment/*
-    name: suwalka-assessment-public
+    name: suwalka-assessment-public-uat
     plugins:
     - config:
         allow_credential: false
@@ -178,7 +181,7 @@ spec:
       - OPTIONS
       paths:
       - /api/recruitment/gatepass/*
-    name: suwalka-gatepass-public
+    name: suwalka-gatepass-public-uat
     plugins:
     - config:
         allow_credential: false
@@ -214,7 +217,7 @@ spec:
       - OPTIONS
       paths:
       - /api/public/interview-resume/*
-    name: suwalka-resume-public
+    name: suwalka-resume-public-uat
     plugins:
     - config:
         allow_credential: false
@@ -251,7 +254,7 @@ spec:
       - OPTIONS
       paths:
       - /api/gate/*
-    name: suwalka-gate-devices
+    name: suwalka-gate-devices-uat
     plugins:
     - config:
         allow_credential: false
