@@ -23,7 +23,7 @@ metadata:
 spec:
   ingressClassName: apisix
   http:
-  - name: suwalka-org-hr-payroll-uat-api
+  - name: suwalka-org-hr-payroll-api-uat
     match:
       hosts:
       - api-uat.faithandgamble.in
@@ -36,6 +36,8 @@ spec:
       - /api/grievances
       - /api/grievances/*
       - /api/training/*
+      - /api/manpower/*
+      - /api/probation/*
       - /recruitment/*
       methods:
       - GET
@@ -92,4 +94,3 @@ spec:
           set:
             X-Gateway: sfg-labs
             X-Project: suwalka
-            X-Env: uat
