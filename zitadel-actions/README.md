@@ -51,3 +51,31 @@ The Action must never block login: an unmapped user (no employee row, network
 hiccup, non-200 response) simply results in the claim staying absent, which
 every backend controller already treats as "no capability" — the
 authorization side is fail-closed, so the login side can safely fail-open.
+
+## `setIdentityClaims` — per-environment resolver (2026-09-19)
+
+`setIdentityClaims.js` is the Action that fetches the claims live from org-hr's
+`/api/hr/internal/admin-grants/by-sub`. Dev and UAT share this Zitadel, so it
+chooses the org-hr by the **client id the token is issued for**
+(`ctx.v1.application.getClientId()`, available on *Pre Userinfo creation*):
+
+| Client id | Source | Resolver | Token line |
+|---|---|---|---|
+| `389855554874442152` | `oidc-client-id` in `sfg-pos-app-uat/suwalka-auth-secrets` | `suwalka-org-hr-payroll.sfg-pos-app-uat.svc.cluster.local:3001` | `INTERNAL_TOKEN_UAT` |
+| anything else (dev `378146155789287497`, console, unknown) | — | `suwalka-org-hr-payroll.sfg-pos-app.svc.cluster.local:3001` | `INTERNAL_TOKEN_DEV` |
+
+Before this, every UAT login carried **dev's** `suwalka_admin` / `suwalka_caps` /
+`suwalka_identity`, so a dev super-admin looked like a super-admin on UAT while UAT's
+own `admin_grants` disagreed (manual attendance: *"Record is outside your outlet
+scope"*, 2026-09-19).
+
+The two namespaces have **different** `internal-grant-token` values — fill each line
+from its own namespace:
+
+```
+kubectl -n sfg-pos-app     get secret suwalka-auth-secrets -o jsonpath='{.data.internal-grant-token}' | base64 -d
+kubectl -n sfg-pos-app-uat get secret suwalka-auth-secrets -o jsonpath='{.data.internal-grant-token}' | base64 -d
+```
+
+A new environment needs its own row in `RESOLVERS`. Adding a client id to the
+`suwalka-auth` secret without that row silently sends its logins to dev.
