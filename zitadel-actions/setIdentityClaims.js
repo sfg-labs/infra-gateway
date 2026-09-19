@@ -46,7 +46,9 @@
  * service-side guard). The resolver is now chosen by the client id the token is
  * issued for (ctx.v1.application.getClientId(), Pre Userinfo creation):
  *   389855554874442152 (UAT suwalka-auth)  -> sfg-pos-app-uat, UAT token
- *   anything else, or no client id          -> sfg-pos-app (dev), dev token
+ *   378146155789287497 (dev suwalka-auth)  -> sfg-pos-app (dev), dev token
+ *   anything else, or no client id          -> dev, and a zitadel/log line
+ * Resolver failures (non-200, throw) are logged too; claims stay empty.
  * The client ids are the `oidc-client-id` key of `suwalka-auth-secrets` in each
  * namespace; the two namespaces also have DIFFERENT internal-grant-token values,
  * hence two token lines. A new environment needs a row in RESOLVERS.
@@ -62,20 +64,35 @@ function setIdentityClaims(ctx, api) {
   var INTERNAL_TOKEN_DEV = '<set-me-in-the-zitadel-console-only>';
   var INTERNAL_TOKEN_UAT = '<set-me-in-the-zitadel-console-only>';
   var RESOLVER_PATH = '/api/hr/internal/admin-grants/by-sub';
-  var DEV = { url: 'http://suwalka-org-hr-payroll.sfg-pos-app.svc.cluster.local:3001' + RESOLVER_PATH, token: INTERNAL_TOKEN_DEV };
-  // client id -> resolver. Unlisted client ids (dev, console, anything new) keep
-  // today's behaviour: dev's org-hr.
+  var DEV = { name: 'dev', url: 'http://suwalka-org-hr-payroll.sfg-pos-app.svc.cluster.local:3001' + RESOLVER_PATH, token: INTERNAL_TOKEN_DEV };
+  var UAT = { name: 'uat', url: 'http://suwalka-org-hr-payroll.sfg-pos-app-uat.svc.cluster.local:3001' + RESOLVER_PATH, token: INTERNAL_TOKEN_UAT };
+  // client id -> resolver. Anything not listed falls back to dev (today's
+  // behaviour) but is LOGGED: a UAT client id that stops matching (rotation,
+  // typo) would otherwise silently hand UAT logins dev's claims again.
   var RESOLVERS = {
-    '389855554874442152': { url: 'http://suwalka-org-hr-payroll.sfg-pos-app-uat.svc.cluster.local:3001' + RESOLVER_PATH, token: INTERNAL_TOKEN_UAT }
+    '378146155789287497': DEV,
+    '389855554874442152': UAT
   };
+  var logger = require('zitadel/log');
+  var sub = '';
+  try {
+    sub = ctx.v1.getUser().id;              // Zitadel sub is numeric -> safe to concat
+  } catch (e) {
+    logger.log('setIdentityClaims: getUser() threw; claims left empty; err=' + e);
+  }
 
   var clientId = '';
   try {
     clientId = (ctx.v1.application && ctx.v1.application.getClientId()) || '';
   } catch (e) {
+    logger.log('setIdentityClaims: getClientId() threw, using dev resolver; sub=' + sub + ' err=' + e);
     clientId = '';
   }
-  var resolver = RESOLVERS[clientId] || DEV;
+  var resolver = Object.prototype.hasOwnProperty.call(RESOLVERS, clientId) ? RESOLVERS[clientId] : null;
+  if (!resolver) {
+    logger.log('setIdentityClaims: unmapped client id "' + clientId + '", using dev resolver; sub=' + sub);
+    resolver = DEV;
+  }
   var RESOLVER_URL = resolver.url;
   var INTERNAL_TOKEN = resolver.token;
 
@@ -85,8 +102,8 @@ function setIdentityClaims(ctx, api) {
   var branchSet = [];
 
   try {
+    if (!sub) throw new Error('no sub');
     var http = require('zitadel/http');
-    var sub = ctx.v1.getUser().id;            // Zitadel sub is numeric -> safe to concat
 
     var res = http.fetch(RESOLVER_URL + '?sub=' + sub, {
       method: 'GET',
@@ -102,8 +119,12 @@ function setIdentityClaims(ctx, api) {
         identity = result.suwalka_identity;
       }
       if (Array.isArray(result.suwalka_branch_set)) branchSet = result.suwalka_branch_set;
+    } else {
+      // Fail-open, but never silently (the 2026-08-09 outage was a silent catch).
+      logger.log('setIdentityClaims: ' + resolver.name + ' resolver returned ' + (res ? res.status : 'no response') + '; claims left empty; sub=' + sub);
     }
   } catch (e) {
+    logger.log('setIdentityClaims: ' + resolver.name + ' resolver call failed; claims left empty; sub=' + sub + ' err=' + e);
     admin = []; caps = []; identity = null; branchSet = [];
   }
 
