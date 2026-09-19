@@ -48,6 +48,10 @@ spec:
         client_id: "bearer-only-unused"
         client_secret: "bearer-only-unused"
         realm: suwalka
+        # Verify the bearer token against the issuer's JWKS. Without it the
+        # plugin introspects with the placeholder client above and every call
+        # is a 401 at the gateway (UAT, 2026-09-19). Same as the inbox rule.
+        use_jwks: true
         set_userinfo_header: true
         userinfo_header_name: X-Userinfo
         set_id_token_header: false
