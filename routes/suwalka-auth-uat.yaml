@@ -97,7 +97,7 @@ spec:
           - api-uat.faithandgamble.in
         paths:
           - /auth/admin/*
-        methods: [GET, POST, PUT, PATCH, DELETE]
+        methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
       backends:
         - serviceName: suwalka-auth
           servicePort: 3000
