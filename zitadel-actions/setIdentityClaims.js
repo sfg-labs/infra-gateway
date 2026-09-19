@@ -73,7 +73,9 @@ function setIdentityClaims(ctx, api) {
     '378146155789287497': DEV,
     '389855554874442152': UAT
   };
-  var logger = require('zitadel/log');
+  // Logging must never be the thing that aborts the run.
+  var logger = { log: function () {} };
+  try { logger = require('zitadel/log'); } catch (e) {}
   var sub = '';
   try {
     sub = ctx.v1.getUser().id;              // Zitadel sub is numeric -> safe to concat
