@@ -39,7 +39,7 @@ function setIdentityClaimsLive(ctx, api) {
 
   var sub = '';
   try { sub = ctx.v1.getUser().id; } catch (e) { logger.log('setIdentityClaimsLive: getUser() threw; err=' + e); return; }
-  if (!sub) return;
+  if (!sub) { logger.log('setIdentityClaimsLive: getUser() returned no id; no claims set'); return; }
 
   var result = null;
   try {
@@ -48,6 +48,7 @@ function setIdentityClaimsLive(ctx, api) {
     if (res && res.status === 200) {
       var body = res.json();
       result = (body && body.result) || null;
+      if (!result) logger.log('setIdentityClaimsLive: resolver 200 without a result field; no claims set; sub=' + sub);
     } else {
       logger.log('setIdentityClaimsLive: resolver returned ' + (res ? res.status : 'no response') + '; sub=' + sub);
     }
@@ -55,12 +56,23 @@ function setIdentityClaimsLive(ctx, api) {
     logger.log('setIdentityClaimsLive: resolver call failed; sub=' + sub + ' err=' + e);
   }
   if (!result) return;
+  if (!result.suwalka_identity) {
+    // No employee mapped to this sub in UAT org-hr: the token gets no orgId and
+    // ai-services will 401 this user. Worth a line — it is the voice-parse symptom.
+    logger.log('setIdentityClaimsLive: no suwalka_identity for sub=' + sub + ' (no UAT employee with this auth_subject?)');
+  }
 
   // userinfo is what APISIX forwards as X-Userinfo; claims is the use_jwks/token path.
-  // Each is wrapped: a key already set by an earlier Action raises "key already exists".
+  // Each is wrapped: a key already set by an earlier Action raises "key already exists"
+  // (expected — metadata wins); any other failure is logged.
+  function logUnexpected(where, key, e) {
+    if (String(e).indexOf('already exists') < 0) {
+      logger.log('setIdentityClaimsLive: ' + where + '.setClaim(' + key + ') failed; err=' + e);
+    }
+  }
   function setBoth(key, value) {
-    try { api.v1.userinfo.setClaim(key, value); } catch (e1) {}
-    try { api.v1.claims.setClaim(key, value); } catch (e2) {}
+    try { api.v1.userinfo.setClaim(key, value); } catch (e1) { logUnexpected('userinfo', key, e1); }
+    try { api.v1.claims.setClaim(key, value); } catch (e2) { logUnexpected('claims', key, e2); }
   }
   if (result.suwalka_identity && typeof result.suwalka_identity === 'object') setBoth('suwalka_identity', result.suwalka_identity);
   if (Array.isArray(result.suwalka_admin) && result.suwalka_admin.length) setBoth('suwalka_admin', result.suwalka_admin);
