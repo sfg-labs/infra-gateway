@@ -41,7 +41,18 @@ Mirrors what UAT used on the shared instance (values read live at migration time
   (IAM_LOGIN_CLIENT), `svc-suwalka-events-uat` (IAM_OWNER_VIEWER), plus the instance admin
   machine user created with the instance.
 - **Actions** `complementTokenClaims` + `setIdentityClaimsUat`, copied from the shared instance
-  with the new client id, on flow *complement token* → pre-userinfo and pre-access-token.
+  with the new client id, on flow *complement token* → pre-userinfo and pre-access-token. Both
+  only copy claims out of Zitadel user **metadata**, so on their own a login without
+  `suwalka_identity` metadata gets no `orgId` (ai-services voice-parse 401'd on it — org-hr hid
+  the gap via `RESOLVE_IDENTITY_BY_SUB`). Added 2026-09-19: **`setIdentityClaimsLive`**
+  ([`zitadel-actions/uat/setIdentityClaimsLive.js`](../zitadel-actions/uat/setIdentityClaimsLive.js)),
+  the live resolver pinned to UAT org-hr, bound **last** on both triggers so it only fills
+  claims the metadata Actions left empty.
+- **Login V2 must stay ON.** suwalka-auth's Session-API login reads `authRequest=V2_…` from the
+  authorize redirect; turning Login V2 off made every UAT `/auth/login` 502 ("Zitadel auth
+  request could not be started") on 2026-09-19. The side effect is that the Console's login page
+  returns "Not Found" (the v2 login app is not deployed) — administer this instance through the
+  Management API with the instance-admin PAT.
 - **Human logins:** the 7 UAT employees' logins were copied with the **same user id, username,
   email and password hash**, so `employees.auth_subject` stayed valid and nobody's password
   changed. Each carries `suwalka_env=uat` + `suwalka_employee_id` metadata (auth #35's stamp).
