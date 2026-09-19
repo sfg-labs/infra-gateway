@@ -597,6 +597,62 @@ spec:
         header_name: X-Request-Id
         include_in_response: true
 
+  # Suwalka candidate offer-letter link — PUBLIC AT THE GATEWAY (2026-09-19).
+  #
+  # The "View offer letter" button in the offer email: a candidate opens it straight
+  # from their mailbox, with no account, to read and download their offer letter.
+  # org-hr serves it at /api/public/offer-letter/* (mounted BEFORE readUser); the
+  # opaque token in the path names ONE sent offer and is the only credential
+  # (256-bit, stored hashed, superseded on re-send, revoked on withdraw/decline).
+  #
+  # ⚠️ WITHOUT THIS BLOCK THE FEATURE DOES NOT WORK, AND NOTHING IN org-hr CAN TELL —
+  # the same trap as the resume and scorecard rules: every test passes while every
+  # real click 401s here.
+  #
+  # Read-only: GET the summary and GET .../pdf, plus OPTIONS for the cross-origin
+  # fetch from the admin-web /offer/<token> page. No write verb exists under this
+  # prefix, so none is admitted.
+  #
+  # Explicit priority and the file's standard 20/10 public rate limit, same
+  # reasoning as the rules above.
+  - name: suwalka-offer-letter-public
+    priority: 10
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/public/offer-letter/*
+      methods:
+      - GET
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "Content-Type,X-Request-Id"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
   # Suwalka gate scanner devices — PUBLIC AT THE GATEWAY, guarded by a shared secret.
   #
   # GET /api/gate/sync and POST /api/gate/scans are the physical check-in scanners at
