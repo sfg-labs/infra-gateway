@@ -1,0 +1,317 @@
+# UAT PUBLIC routes (no openid-connect) — api-uat.faithandgamble.in, namespace sfg-pos-app-uat.
+#
+# Captured from the LIVE objects on 2026-09-19; every setting is as live. The only
+# deliberate difference: rule names carry a -uat suffix, because the repo requires
+# rule names to be unique and the live UAT names duplicated routes/public.yaml's.
+#
+# Everything here is reachable WITHOUT a token. Each path is public by design:
+#   careers list/apply, assessment + gate-pass + interview-resume + scorecard links
+#   (candidate/interviewer magic links), and gate devices (X-Gate-Token, checked by
+#   org-hr). Do not add a path here unless the backend authenticates it itself.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: public-routes-suwalka-uat
+  namespace: sfg-pos-app-uat
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes \u2014 UAT careers page (list + apply)"
+spec:
+  http:
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      exprs:
+      - op: RegexMatch
+        subject:
+          scope: Path
+        value: ^/api/recruitment/public/careers/jobs(/[^/]+(/apply)?)?/?$
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+      paths:
+      - /api/recruitment/public/careers/*
+    name: suwalka-careers-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: '*'
+        allow_methods: GET,POST,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 10
+        key: remote_addr
+        key_type: var
+        rate: 20
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        headers:
+          set:
+            X-Client-IP: $remote_addr
+      enable: true
+      name: proxy-rewrite
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+    priority: 10
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      exprs:
+      - op: RegexMatch
+        subject:
+          scope: Path
+        value: ^/api/recruitment/public/careers/jobs/[^/]+/apply/?$
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - POST
+      - OPTIONS
+      paths:
+      - /api/recruitment/public/careers/jobs/*
+    name: suwalka-careers-apply-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: '*'
+        allow_methods: POST,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 2
+        key: remote_addr
+        key_type: var
+        rate: 5
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        headers:
+          set:
+            X-Client-IP: $remote_addr
+      enable: true
+      name: proxy-rewrite
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+    priority: 20
+  ingressClassName: apisix
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: public-routes-suwalka-uat-extra
+  namespace: sfg-pos-app-uat
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes \u2014 UAT assessment, gate pass, interview resume + scorecard links, gate devices"
+spec:
+  http:
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+      paths:
+      - /api/public/assessment/*
+    name: suwalka-assessment-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: '*'
+        allow_methods: GET,POST,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 20
+        key: remote_addr
+        key_type: var
+        rate: 20
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      exprs:
+      - op: RegexMatch
+        subject:
+          scope: Path
+        value: ^/api/recruitment/gatepass/[^/]+/?$
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - OPTIONS
+      paths:
+      - /api/recruitment/gatepass/*
+    name: suwalka-gatepass-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: '*'
+        allow_methods: GET,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 10
+        key: remote_addr
+        key_type: var
+        rate: 20
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+    priority: 10
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - OPTIONS
+      paths:
+      - /api/public/interview-resume/*
+    name: suwalka-resume-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: '*'
+        allow_methods: GET,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 10
+        key: remote_addr
+        key_type: var
+        rate: 20
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+    priority: 10
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+      paths:
+      - /api/gate/*
+    name: suwalka-gate-devices-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: '*'
+        allow_methods: GET,POST,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 40
+        key: remote_addr
+        key_type: var
+        rate: 40
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - PUT
+      - POST
+      - OPTIONS
+      paths:
+      - /api/public/interview-scorecard/*
+    name: suwalka-scorecard-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: Content-Type,X-Request-Id
+        allow_methods: GET,PUT,POST,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 10
+        key: remote_addr
+        key_type: var
+        rate: 20
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+    priority: 10
+  ingressClassName: apisix
