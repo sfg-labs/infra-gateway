@@ -55,9 +55,21 @@ not re-logged in looks broken (uploads fail with "Could not upload selfie"). Log
 
 ## Rollback
 
-Restore `suwalka-auth-secrets` (UAT) and the four live `*-uat` ApisixRoutes from the cut-over
-backup, then restart `suwalka-auth` in `sfg-pos-app-uat`. The shared instance was not changed by
+Restore `suwalka-auth-secrets` (UAT) and **every applied** `*-uat` ApisixRoute from the cut-over
+backup (four at cut-over: ai-services, auth, notification, org-hr — if more `*-uat` routes have
+been applied since, repoint their discovery back too, or UAT ends up split across two issuers),
+then restart `suwalka-auth` in `sfg-pos-app-uat`. The shared instance was not changed by
 the cut-over, so UAT works on it again immediately (users log in once more).
+
+## Known drift (pre-existing, not from this change)
+
+The committed files for two **live** UAT routes do not match live, so do not re-apply them as-is:
+
+- `routes/suwalka-org-hr-payroll-uat.yaml` lacks the live `/api/manpower/*` and `/api/probation/*`
+  paths (and adds an `X-Env: uat` header live does not have).
+- `routes/suwalka-auth-uat.yaml` lacks `OPTIONS` on the `/auth/admin/*` rule, which live has.
+
+Re-applying either would remove working UAT behaviour. Reconcile git to live first.
 
 ## Still to do
 
