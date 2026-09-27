@@ -25,9 +25,30 @@
  * — do not commit the real secret value into this file.
  */
 function complementTokenClaims(ctx, api) {
-  var sub = ctx.v1.getUser().id;
-  var http = require('zitadel/http');
+  // ORDER MATTERS, AND IT IS DIAGNOSTIC.
+  //
+  // `zitadel/log` is required FIRST and an entry line is written before
+  // anything else, so the userinfo response carries a
+  // `urn:zitadel:iam:action:<name>:log` key the moment this function is
+  // entered at all. Without that, "no claims" and "never ran" look identical
+  // from the outside — which is precisely how this went unnoticed since
+  // 2026-08-03.
+  //
+  // `zitadel/http` is then required INSIDE a try. If that module is
+  // unavailable on this instance, the throw is caught here and reported,
+  // instead of escaping the whole function before `logger` exists and being
+  // swallowed by `allowedToFail: true`.
   var logger = require('zitadel/log');
+  logger.log('entered');
+
+  var sub = ctx.v1.getUser().id;
+  var http;
+  try {
+    http = require('zitadel/http');
+  } catch (err) {
+    logger.log('zitadel/http unavailable on this instance', err);
+    return;
+  }
 
   var INTERNAL_GRANT_TOKEN = '<set-me-in-the-zitadel-console-only>';
   var ORG_HR_BASE_URL = 'http://suwalka-org-hr-payroll.sfg-labs.svc.cluster.local:3001';

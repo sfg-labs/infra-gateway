@@ -88,9 +88,25 @@ IGT=$(kubectl --kubeconfig "$KC" -n "$NS" get secret "$SEC" -o jsonpath='{.data.
 echo "issuer  : $ISSUER"
 echo "secrets : loaded (${#PAT} / ${#IGT} chars, not printed)"
 
+# Every Zitadel call goes through this, so the PAT is NEVER an argv entry.
+#
+# `` puts a full iam-admin token on the command
+# line, where anyone who can run `ps` on this machine reads it for as long as the
+# curl runs. The script already refuses to put INTERNAL_GRANT_TOKEN on argv for
+# exactly that reason ("argv is world-readable in /proc") and then did it anyway
+# with the more powerful of the two secrets. Raised in review of #66.
+#
+# `curl --config -` reads options from stdin, so the header never appears in the
+# process table. `--` is not needed: every caller passes its own flags after the
+# URL, and curl treats the config as an additional source rather than a
+# replacement for them.
+zcurl() {
+  printf 'header = "Authorization: Bearer %s"\n' "$PAT" | curl -s --config - "$@"
+}
+
 # Fail EARLY and with the real reason, rather than half-deploying.
-PRECHECK=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$ISSUER/management/v1/actions/_search" \
-  -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d '{}')
+PRECHECK=$(zcurl -o /dev/null -w '%{http_code}' -X POST "$ISSUER/management/v1/actions/_search" \
+  -H 'Content-Type: application/json' -d '{}')
 if [ "$PRECHECK" = "403" ]; then
   echo >&2
   echo "403 on actions/_search — the service account still lacks Actions permission." >&2
@@ -100,46 +116,66 @@ if [ "$PRECHECK" = "403" ]; then
 fi
 [ "$PRECHECK" = "200" ] || { echo "unexpected HTTP $PRECHECK on the precheck — aborting" >&2; exit 1; }
 
-# Build the script body with the token substituted. Done in python via stdin so
-# the secret is never an argv entry (argv is world-readable in /proc).
-BODY=$(SRC="$SRC" ACTION_NAME="$ACTION_NAME" python3 - <<'PY'
+# Build the script body with the token substituted.
+#
+# THE TOKEN GOES IN AS AN ENV VAR, NOT ON STDIN.
+#
+# The previous form was `python3 - <<'X' … X <<<"$IGT"`, which has TWO stdin
+# redirections: the heredoc feeds python its script and the herestring is
+# swallowed. `sys.stdin.read()` therefore returned EMPTY and the token silently
+# became "". That is what actually shipped — the deployed Action ran with
+# `INTERNAL_GRANT_TOKEN = ""`, every resolver call 401'd, and because the
+# original ordering required `zitadel/http` before `zitadel/log` it produced no
+# log key either. From outside it was indistinguishable from "the Action never
+# runs", which is exactly the wrong diagnosis it led to.
+#
+# Env rather than argv: argv is world-readable in /proc.
+BODY=$(SRC="$SRC" ACTION_NAME="$ACTION_NAME" IGT="$IGT" python3 <<'PYBODY'
 import json, os, re, sys
+
 src = open(os.environ['SRC']).read()
-token = sys.stdin.read().strip()
+
+token = os.environ['IGT']
+if not token:
+    print('INTERNAL_GRANT_TOKEN is empty — refusing to deploy an Action that cannot '
+          'authenticate. An empty token 401s every resolver call and looks like a '
+          'dead Action.', file=sys.stderr)
+    raise SystemExit(1)
+
 placeholder = "'<set-me-in-the-zitadel-console-only>'"
 if placeholder not in src:
-    print("PLACEHOLDER_MISSING", file=sys.stderr); raise SystemExit(1)
+    print('PLACEHOLDER_MISSING', file=sys.stderr)
+    raise SystemExit(1)
 src = src.replace(placeholder, json.dumps(token))
 
-# ZITADEL INVOKES THE FUNCTION WHOSE NAME MATCHES THE ACTION NAME.
-#
-# The live script carried the instruction in its own header — "Name MUST be
-# exactly: setIdentityClaims" — and it is not decoration. Deploying a body that
-# declares `function complementTokenClaims` under an action named
-# `setIdentityClaims` stores fine, returns 200, and then never runs: Zitadel
-# looks for a function called `setIdentityClaims`, finds none, and silently does
-# nothing. No error, no log key in the userinfo response, no claims.
-#
-# I did exactly that on the first deploy attempt. So the declaration is renamed
-# to the action name at deploy time, rather than relying on the file happening
-# to be called the right thing.
+# ZITADEL INVOKES THE FUNCTION WHOSE NAME MATCHES THE ACTION NAME. Proven by
+# probe: a minimal script named `setIdentityClaims` runs and logs; identical
+# logic under a mismatched name does nothing at all, and says nothing.
 action_name = os.environ['ACTION_NAME']
-src, n = re.subn(r'\bfunction\s+complementTokenClaims\s*\(', f'function {action_name}(', src)
+src, n = re.subn(r'\bfunction\s+complementTokenClaims\s*\(',
+                 'function ' + action_name + '(', src)
 if n != 1:
-    print(f'expected exactly one function declaration to rename, found {n}', file=sys.stderr)
+    print('expected exactly one function declaration to rename, found %d' % n, file=sys.stderr)
     raise SystemExit(1)
 
 print(json.dumps(src))
-PY
-<<<"$IGT")
+PYBODY
+)
+
+# Refuse to ship a body whose token did not make it in — belt and braces on top
+# of the guard above, because this failure is invisible once deployed.
+if printf '%s' "$BODY" | grep -q 'INTERNAL_GRANT_TOKEN = \\"\\"'; then
+  echo "the built body carries an EMPTY INTERNAL_GRANT_TOKEN — aborting" >&2
+  exit 1
+fi
 
 if [ "$DRY_RUN" = 1 ]; then
   echo "dry run — would create/update action '$ACTION_NAME' (${#BODY} bytes) and attach it to flow 2 / trigger 3"
   exit 0
 fi
 
-EXISTING=$(curl -s -X POST "$ISSUER/management/v1/actions/_search" \
-  -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d '{}' \
+EXISTING=$(zcurl -X POST "$ISSUER/management/v1/actions/_search" \
+  -H 'Content-Type: application/json' -d '{}' \
   | ACTION_NAME="$ACTION_NAME" python3 -c "
 import json,sys,os
 d=json.load(sys.stdin)
@@ -157,15 +193,15 @@ print(json.dumps({'name': os.environ['ACTION_NAME'],
 
 if [ -n "$EXISTING" ]; then
   echo "updating existing action $EXISTING"
-  curl -s -o /tmp/zaction.json -w 'update: HTTP %{http_code}\n' -X PUT \
+  zcurl -o /tmp/zaction.json -w 'update: HTTP %{http_code}\n' -X PUT \
     "$ISSUER/management/v1/actions/$EXISTING" \
-    -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d "$PAYLOAD"
+    -H 'Content-Type: application/json' -d "$PAYLOAD"
   ACTION_ID="$EXISTING"
 else
   echo "creating action"
-  curl -s -o /tmp/zaction.json -w 'create: HTTP %{http_code}\n' -X POST \
+  zcurl -o /tmp/zaction.json -w 'create: HTTP %{http_code}\n' -X POST \
     "$ISSUER/management/v1/actions" \
-    -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' -d "$PAYLOAD"
+    -H 'Content-Type: application/json' -d "$PAYLOAD"
   ACTION_ID=$(python3 -c "import json;print(json.load(open('/tmp/zaction.json')).get('id',''))")
 fi
 
@@ -181,7 +217,7 @@ echo "action id: $ACTION_ID"
 # gates — with no error, because the flow would still be valid.
 #
 # So: read what is attached, union in this action, preserve order, write back.
-CURRENT=$(curl -s "$ISSUER/management/v1/flows/2" -H "Authorization: Bearer $PAT")
+CURRENT=$(zcurl "$ISSUER/management/v1/flows/2")
 IDS=$(ACTION_ID="$ACTION_ID" python3 -c "
 import json, os, sys
 flow = (json.load(sys.stdin).get('flow') or {})
@@ -200,9 +236,9 @@ print(json.dumps(ids))
 " <<<"$CURRENT")
 echo "trigger will carry: $IDS"
 
-curl -s -o /tmp/ztrigger.json -w 'attach trigger: HTTP %{http_code}\n' -X POST \
+zcurl -o /tmp/ztrigger.json -w 'attach trigger: HTTP %{http_code}\n' -X POST \
   "$ISSUER/management/v1/flows/2/trigger/3" \
-  -H "Authorization: Bearer $PAT" -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' \
   -d "{\"actionIds\":$IDS}"
 
 cat <<'EOF'
