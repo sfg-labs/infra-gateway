@@ -529,6 +529,74 @@ spec:
         header_name: X-Request-Id
         include_in_response: true
 
+  # Suwalka interviewer scorecard link — PUBLIC AT THE GATEWAY (2026-09-18).
+  #
+  # The "Fill scorecard" link in a panel invite: an interviewer opens it straight from
+  # their mailbox, with no gateway session, and fills in their feedback. org-hr serves it
+  # at /api/public/interview-scorecard/* (routes/interviewScorecardPublic.route.ts),
+  # mounted BEFORE readUser; the opaque token in the path names ONE panelist on ONE
+  # interview and is the only credential.
+  #
+  # ⚠️ WITHOUT THIS BLOCK THE FEATURE DOES NOT WORK, AND NOTHING IN org-hr CAN TELL — the
+  # same trap documented on `suwalka-resume-public` above: every test in that repo passes
+  # while every real click 401s here.
+  #
+  # Scoped to /api/public/interview-scorecard/* rather than /api/public/*, for the reason
+  # at the top of this file: a wildcard silently exposes any future public path.
+  #
+  # GET, PUT, POST, OPTIONS — and that is the whole surface: GET the view and the CV,
+  # PUT a draft, POST .../submit. Unlike the resume rule this one MUST carry writes;
+  # keeping the list exact (no DELETE, no PATCH) is what stops a future verb under the
+  # same prefix from being unauthenticated by inheritance.
+  #
+  # cors IS load-bearing here, not precautionary: the admin-web page at
+  # /interview-scorecard/<token> calls this API cross-origin with a JSON PUT, which
+  # preflights. Same origin list as the rules above.
+  #
+  # Explicit priority, same reasoning as the resume and gatepass rules.
+  #
+  # Rate limit: the file's standard 20/10 public default. The token's 256 bits of
+  # entropy is the real defence against guessing, not this.
+  - name: suwalka-scorecard-public
+    priority: 10
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/public/interview-scorecard/*
+      methods:
+      - GET
+      - PUT
+      - POST
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,PUT,POST,OPTIONS"
+        allow_headers: "Content-Type,X-Request-Id"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
   # Suwalka gate scanner devices — PUBLIC AT THE GATEWAY, guarded by a shared secret.
   #
   # GET /api/gate/sync and POST /api/gate/scans are the physical check-in scanners at
