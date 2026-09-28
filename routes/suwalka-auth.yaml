@@ -238,7 +238,19 @@ spec:
           - api.faithandgamble.in
         paths:
           - /auth/admin/*
-        methods: [GET, POST, PUT, PATCH, DELETE]
+        # OPTIONS is REQUIRED here, not decorative (#916). The cors plugin
+        # below only runs on requests this rule MATCHES — so without OPTIONS
+        # the browser's preflight never reaches the rule, APISIX answers 404,
+        # and the real POST is never sent. The cors plugin's own
+        # `allow_methods` already listed OPTIONS, which is what made this look
+        # configured while every browser call still failed. Both sibling rules
+        # in this file (the public rule, and /auth/password/change) list it.
+        #
+        # Symptom it caused: admin-web's "Re-issue Password" button on the
+        # employee profile showed "Something went wrong" for every attempt,
+        # while the same POST succeeded server-side — the endpoint was fine and
+        # unreachable from a browser.
+        methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
       backends:
         - serviceName: suwalka-auth
           servicePort: 3000
