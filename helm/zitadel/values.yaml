@@ -59,6 +59,15 @@ env:
       secretKeyRef:
         name: zitadel-db
         key: admin-password
+  # bcrypt cost 10 (~200ms per verification; the Zitadel default 14 is ~3s). Set by
+  # hand with `kubectl set env` on 2026-09-16 and pinned here so a helm upgrade or
+  # reinstall cannot silently restore 14. suwalka-auth's 500ms login floor
+  # (AUTH_LOGIN_FLOOR_MS / AUTH_VERIFY_WORST_CASE_MS in its values.yaml) is sized
+  # against THIS cost: raise it and the floor must rise with it, or the login
+  # response time starts revealing which accounts exist. Existing hashes are only
+  # re-hashed on each user's next successful login.
+  - name: ZITADEL_SYSTEMDEFAULTS_PASSWORDHASHER_HASHER_COST
+    value: "10"
 
 resources:
   requests:
