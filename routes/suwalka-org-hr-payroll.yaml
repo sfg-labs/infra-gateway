@@ -1,21 +1,28 @@
-# NAMESPACE NOTE: this ApisixRoute lives in sfg-labs (set via metadata.namespace) because
-# the APISIX ingress controller (ApisixRoute v2) routes only to Services in the route's OWN
-# namespace — backends[].serviceNamespace is not supported. All Suwalka routes therefore live
-# in sfg-labs, alongside the suwalka-* Service objects. sfg-labs (not sfg-apps) is correct for
-# Suwalka per CLAUDE.md and the confirmed k8s Service definition.
+# NAMESPACE: sfg-pos-app — this is the namespace the route ACTUALLY SERVES FROM on the
+# Cantech cluster (sfg-prod), verified 2026-08-19 against the live object. It was previously
+# declared `sfg-labs`, which was correct for the retired DigitalOcean cluster and is WRONG
+# here: the APISIX ingress controller watches ALL namespaces, so applying the sfg-labs form
+# does not update the serving route — it CREATES A SECOND, COMPETING ApisixRoute claiming the
+# same paths on the same host. That already happened to routes/public.yaml on 2026-08-19
+# 05:08 UTC, leaving a duplicate `public-routes-suwalka` in sfg-labs.
 #
-# OPEN QUESTIONS FOR PLATFORM TEAM:
-#   1. Confirm Zitadel realm name "suwalka" is provisioned. If the realm is named
-#      differently in Zitadel (e.g. "suwalka-pos"), update the `realm:` field below.
-#   2. X-Tenant-Id / X-Branch-Id injection: no existing route in this repo explicitly
-#      injects these headers via a proxy-rewrite plugin. Confirm whether Zitadel custom
-#      claims flow them through the X-Userinfo blob (parsed by readUser()) or whether a
-#      dedicated proxy-rewrite block is needed.
+# The controller still routes only to Services in the route's OWN namespace
+# (backends[].serviceNamespace is not supported), and suwalka-org-hr-payroll:3001 is a real
+# ClusterIP Service in sfg-pos-app — so sfg-pos-app satisfies that constraint directly,
+# without the ExternalName shim that was added to sfg-labs on 2026-08-09.
+#
+# PATH LIST: this list is a byte-for-byte match of the live object as of 2026-08-19, so
+# `kubectl diff` against the cluster is empty and an apply is a no-op. Two paths below
+# (/api/manpower/*, /api/probation/*) were live but ABSENT from this file — applying the
+# old file would have DELETED them, because an ApisixRoute apply replaces the whole
+# spec.http list rather than merging into it. Do not remove a path here without first
+# confirming it is not serving.
+
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-org-hr-payroll
-  namespace: sfg-labs
+  namespace: sfg-pos-app
   labels:
     sfg-project: suwalka
     sfg-auth: jwt
@@ -29,8 +36,13 @@ spec:
   - name: suwalka-org-hr-payroll-api
     match:
       hosts:
-      - api.suwalka-pos.sfg-labs.in
+      # Reconciled to the live object 2026-08-19. `api.suwalka-pos.sfg-labs.in` was
+      # removed: it is the retired DigitalOcean hostname, has no DNS record, and is
+      # not on the serving route. `uat-api.faithandgamble.in` is kept because it IS
+      # on the serving route — it has no DNS either, but dropping it here would make
+      # this apply a silent change rather than the intended no-op.
       - api.faithandgamble.in
+      - uat-api.faithandgamble.in
       paths:
       - /api/hr/*
       - /api/recruitment/*
@@ -47,6 +59,12 @@ spec:
       - /api/grievances
       - /api/grievances/*
       - /api/training/*
+      # LIVE on the cluster and missing from this file until 2026-08-19. Manpower
+      # certification surface, same org-hr pod as every path above.
+      - /api/manpower/*
+      # Probation management (org-hr). Same pod — needs admission at the edge only,
+      # not a new upstream. Carries openid-connect below like its siblings.
+      - /api/probation/*
       # Unprefixed careers/recruitment surface. This path is LIVE and was
       # missing from this file — applying the file without it would have
       # deleted it from the route. Kept last to match the deployed path order
