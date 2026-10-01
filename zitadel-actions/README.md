@@ -51,3 +51,11 @@ The Action must never block login: an unmapped user (no employee row, network
 hiccup, non-200 response) simply results in the claim staying absent, which
 every backend controller already treats as "no capability" — the
 authorization side is fail-closed, so the login side can safely fail-open.
+
+## UAT instance (`sfg-labs-uat`)
+
+UAT has its own Zitadel instance (see [`docs/zitadel-uat-instance.md`](../docs/zitadel-uat-instance.md)).
+Its Actions are **not** the ones above: `complementTokenClaims` and `setIdentityClaimsUat` (copied
+at cut-over, metadata-only) plus [`uat/setIdentityClaimsLive.js`](uat/setIdentityClaimsLive.js), the
+live org-hr resolver pinned to UAT. That instance has no working Console login — edit its Actions
+through the Management API.
