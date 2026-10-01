@@ -1,6 +1,7 @@
-# UAT mirror of routes/suwalka-auth.yaml — same three rules (public login/refresh/
-# logout/docs, JWT-protected /auth/admin/*, and the tightly-rate-limited
-# /auth/password/change), same CORS/rate-limit posture, UAT host + namespace.
+# UAT mirror of routes/suwalka-auth.yaml — same four rules (public login/refresh/
+# logout/docs, JWT-protected /auth/admin/*, the tightly-rate-limited
+# /auth/password/change, and /auth/password/forgot + /reset under the same limit),
+# same CORS/rate-limit posture, UAT host + namespace.
 #
 # See routes/suwalka-auth.yaml for the full rationale behind every rate-limit and
 # CORS value here (source-IP SNAT collapsing remote_addr, Zitadel lockout being
@@ -142,6 +143,49 @@ spec:
         paths:
           - /auth/password/change
           - /auth/password/change/
+        methods: [POST, OPTIONS]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
+            max_age: 3600
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            rate: 5
+            burst: 10
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+                X-Env: uat
+    - name: suwalka-auth-uat-password-reset
+      match:
+        hosts:
+          - api-uat.faithandgamble.in
+        paths:
+          - /auth/password/forgot
+          - /auth/password/forgot/
+          - /auth/password/reset
+          - /auth/password/reset/
         methods: [POST, OPTIONS]
       backends:
         - serviceName: suwalka-auth
