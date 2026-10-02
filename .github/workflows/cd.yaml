@@ -11,6 +11,8 @@ name: CD
 #   ZITADEL_MASTERKEY    Zitadel master key — MUST be exactly 32 characters
 #   APISIX_ADMIN_KEY     APISIX admin API key (any strong value)
 #   SUWALKA_AI_GATEWAY_SECRET  X-Gateway-Secret injected into routes/suwalka-ai-services.yaml
+#   SUWALKA_AI_GATEWAY_SECRET_UAT  Same, but for routes/suwalka-ai-services-uat.yaml — a
+#                              distinct value from SUWALKA_AI_GATEWAY_SECRET on purpose
 #   ZIMMA_GATEWAY_SECRET       X-Gateway-Secret injected into routes/zimma-api.yaml — MUST
 #                              equal GATEWAY_SHARED_SECRET in the zimma-api-secrets k8s Secret
 
@@ -127,6 +129,9 @@ jobs:
           # Substituted into routes/suwalka-ai-services.yaml's X-Gateway-Secret injection
           # by envsubst in helm/deploy.sh — keeps the secret out of git.
           SUWALKA_AI_GATEWAY_SECRET: ${{ secrets.SUWALKA_AI_GATEWAY_SECRET }}
+          # Same mechanism for routes/suwalka-ai-services-uat.yaml — deliberately a
+          # DIFFERENT secret from prod's, so it must be created as its own GitHub Secret.
+          SUWALKA_AI_GATEWAY_SECRET_UAT: ${{ secrets.SUWALKA_AI_GATEWAY_SECRET_UAT }}
           # Same mechanism for routes/zimma-api.yaml — must equal the
           # GATEWAY_SHARED_SECRET key of the zimma-api-secrets Secret in sfg-labs.
           ZIMMA_GATEWAY_SECRET: ${{ secrets.ZIMMA_GATEWAY_SECRET }}

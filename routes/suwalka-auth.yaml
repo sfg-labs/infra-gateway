@@ -7,6 +7,8 @@
 # auth is reached at:
 #   PUBLIC (no token):  /auth/login | /auth/refresh | /auth/logout | /auth/docs
 #   PUBLIC (no token):  /auth/password/change   (own rule — tighter rate limit)
+#   PUBLIC (no token):  /auth/password/forgot | /auth/password/reset
+#                       (own rule — same tight limit as password/change)
 #   PROTECTED (JWT):    /auth/admin/*
 # (login/refresh/logout are POST; /auth/docs is the Swagger UI. /healthz stays
 #  pod-internal for k8s probes — not exposed through the gateway.)
@@ -238,7 +240,19 @@ spec:
           - api.faithandgamble.in
         paths:
           - /auth/admin/*
-        methods: [GET, POST, PUT, PATCH, DELETE]
+        # OPTIONS is REQUIRED here, not decorative (#916). The cors plugin
+        # below only runs on requests this rule MATCHES — so without OPTIONS
+        # the browser's preflight never reaches the rule, APISIX answers 404,
+        # and the real POST is never sent. The cors plugin's own
+        # `allow_methods` already listed OPTIONS, which is what made this look
+        # configured while every browser call still failed. Both sibling rules
+        # in this file (the public rule, and /auth/password/change) list it.
+        #
+        # Symptom it caused: admin-web's "Re-issue Password" button on the
+        # employee profile showed "Something went wrong" for every attempt,
+        # while the same POST succeeded server-side — the endpoint was fine and
+        # unreachable from a browser.
+        methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
       backends:
         - serviceName: suwalka-auth
           servicePort: 3000
@@ -428,6 +442,61 @@ spec:
             # Deviation from the tier table in docs/adding-a-service.md: below
             # every tier there, including "Webhooks (public)" (20/10), because
             # legitimate demand is a once-per-employee-lifetime action.
+            rate: 5
+            burst: 10
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+    # Self-service forgot password (suwalka-auth#36). POST /auth/password/forgot
+    # emails a reset code; POST /auth/password/reset sets a new password with
+    # it. Both are pre-auth (the employee cannot sign in), so this is the same
+    # shape as the password-change rule above: its own rule, POST + OPTIONS,
+    # both path spellings, the same CORS, and the same 5/10 limit.
+    #
+    # Everything said about that limit applies here too: keyed on remote_addr
+    # it is a volumetric backstop, not a per-client control. The real controls
+    # live in suwalka-auth — 3 codes per login name per hour, 5 wrong codes per
+    # 15 minutes, a ~2s constant floor on /forgot, and the change-password floor
+    # plus the shared credential gate on /reset. Legitimate demand is a few
+    # requests per employee per forgotten password, far under 5 req/s.
+    - name: suwalka-auth-password-reset
+      match:
+        hosts:
+          - api.faithandgamble.in
+        paths:
+          - /auth/password/forgot
+          - /auth/password/forgot/
+          - /auth/password/reset
+          - /auth/password/reset/
+        methods: [POST, OPTIONS]
+      backends:
+        - serviceName: suwalka-auth
+          servicePort: 3000
+      plugins:
+        # Copied from the password-change rule — tighten the two together.
+        - name: cors
+          enable: true
+          config:
+            allow_origins: "**"
+            allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+            allow_credential: true
+            max_age: 3600
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
             rate: 5
             burst: 10
             rejected_code: 429

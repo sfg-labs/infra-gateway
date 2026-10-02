@@ -39,6 +39,24 @@ else
 fi
 
 echo ""
+echo "--- Zitadel Action unit tests ------------------------"
+# The Action runs inside Zitadel's own JS runtime, so no other job here executes
+# it: yamllint/shellcheck skip .js, and the Docker integration stack exercises
+# APISIX, not the IdP. Without this, an inverted guard ships green and surfaces
+# only as a claim silently missing from every token — which is how
+# suwalka_grant_caps went unminted from 2026-08-03 to 2026-08-24.
+if command -v node >/dev/null 2>&1; then
+  if node "$(dirname "$0")/zitadel-action-claims.test.js"; then
+    PASS=$((PASS + 1))
+  else
+    echo "    FAIL: zitadel-action-claims.test.js"
+    FAIL=$((FAIL + 1))
+  fi
+else
+  echo "    SKIP: node not installed"
+fi
+
+echo ""
 echo "========================================================"
 echo "  Results: ${PASS} passed, ${FAIL} failed"
 [[ "$FAIL" -eq 0 ]] || exit 1
