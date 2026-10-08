@@ -6,8 +6,16 @@
 #
 # Everything here is reachable WITHOUT a token. Each path is public by design:
 #   careers list/apply, assessment + gate-pass + interview-resume + scorecard links
-#   (candidate/interviewer magic links), and gate devices (X-Gate-Token, checked by
-#   org-hr). Do not add a path here unless the backend authenticates it itself.
+#   (candidate/interviewer magic links), offer-letter link, and gate devices
+#   (X-Gate-Token, checked by org-hr). Do not add a path here unless the backend
+#   authenticates it itself.
+#
+# CORS: every rule also allows https://app.suwalkamotors.co.in, the second public
+# address of the UAT admin web (routes/admin-web-uat.yaml). It sits next to
+# https://suwalka-uat.faithandgamble.in, which stays in every list as a working alias.
+#
+# suwalka-offer-letter-public-uat was applied by hand from sfg-labs/infra-gateway#65
+# before that PR merged; it is captured here exactly as live (plus the new origin).
 apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
@@ -43,7 +51,7 @@ spec:
         allow_credential: false
         allow_headers: '*'
         allow_methods: GET,POST,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
@@ -90,7 +98,7 @@ spec:
         allow_credential: false
         allow_headers: '*'
         allow_methods: POST,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
@@ -146,7 +154,7 @@ spec:
         allow_credential: false
         allow_headers: '*'
         allow_methods: GET,POST,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
@@ -186,7 +194,7 @@ spec:
         allow_credential: false
         allow_headers: '*'
         allow_methods: GET,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
@@ -222,7 +230,7 @@ spec:
         allow_credential: false
         allow_headers: '*'
         allow_methods: GET,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
@@ -259,7 +267,7 @@ spec:
         allow_credential: false
         allow_headers: '*'
         allow_methods: GET,POST,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
@@ -296,7 +304,43 @@ spec:
         allow_credential: false
         allow_headers: Content-Type,X-Request-Id
         allow_methods: GET,PUT,POST,OPTIONS
-        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
+        max_age: 3600
+      enable: true
+      name: cors
+    - config:
+        burst: 10
+        key: remote_addr
+        key_type: var
+        rate: 20
+        rejected_code: 429
+      enable: true
+      name: limit-req
+    - config:
+        header_name: X-Request-Id
+        include_in_response: true
+      enable: true
+      name: request-id
+    priority: 10
+  - backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    match:
+      hosts:
+      - api-uat.faithandgamble.in
+      methods:
+      - GET
+      - OPTIONS
+      paths:
+      - /api/public/offer-letter/*
+    name: suwalka-offer-letter-public-uat
+    plugins:
+    - config:
+        allow_credential: false
+        allow_headers: Content-Type,X-Request-Id
+        allow_methods: GET,OPTIONS
+        allow_origins: http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in
         max_age: 3600
       enable: true
       name: cors
