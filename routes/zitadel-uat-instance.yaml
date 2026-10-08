@@ -1,0 +1,43 @@
+# UAT's own Zitadel virtual instance — sfg-labs-uat.faithandgamble.in.
+#
+# Same sfg-zitadel deployment as the dev/shared instance (public-routes-gateway,
+# host sfg-labs.faithandgamble.in); Zitadel picks the instance from the Host
+# header, which APISIX passes through unchanged. No Login V2 rule: UAT staff log
+# in through suwalka-auth's Session-API flow, never the hosted login UI.
+# See docs/zitadel-uat-instance.md.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: zitadel-uat-instance
+  namespace: sfg-gateway
+  labels:
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Public routes — UAT's own Zitadel instance (OIDC discovery, JWKS, token, session APIs)"
+spec:
+  ingressClassName: apisix
+  http:
+    - name: zitadel-uat-instance
+      match:
+        hosts:
+          - sfg-labs-uat.faithandgamble.in
+        paths:
+          - /*
+      backends:
+        - serviceName: sfg-zitadel
+          servicePort: 8080
+          weight: 100
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            burst: 200
+            key: remote_addr
+            key_type: var
+            rate: 200
+            rejected_code: 429

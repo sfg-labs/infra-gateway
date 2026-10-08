@@ -34,6 +34,15 @@ jobs:
             tests/lint.sh tests/helm-template.sh tests/validate-routes.sh \
             tests/smoke/smoke-test.sh tests/smoke/smoke-test-local.sh
 
+      # The Zitadel Action is JavaScript that runs inside the IdP, so nothing
+      # else in this pipeline executes it: yamllint and shellcheck skip .js, and
+      # the integration job exercises APISIX rather than Zitadel. Without this
+      # step an inverted claim guard ships green and shows up only as a claim
+      # silently missing from every token — which is how suwalka_grant_caps went
+      # unminted from 2026-08-03 to 2026-08-24.
+      - name: Zitadel Action unit tests
+        run: node tests/zitadel-action-claims.test.js
+
   validate-routes:
     name: Validate ApisixRoute YAMLs
     runs-on: [self-hosted, linux, x64]
