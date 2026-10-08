@@ -1,0 +1,99 @@
+# UAT candidate-facing pages of admin-web, served on the company website host:
+#   https://web.suwalkamotors.co.in/careers  (+ /assessment/<token>, /offer/<token>,
+#   /gatepass/<token> — candidate email links will move to this host later)
+#
+# UAT (sfg-pos-app-uat) is the live hiring system: real applicants land here.
+#
+# HOW THIS SHARES THE HOST WITH THE WEBSITE
+# web.suwalkamotors.co.in is owned by ApisixRoute `suwalka-website` (namespace
+# suwalka-website, NOT in this repo): host web.suwalkamotors.co.in, path /*, no
+# priority (0) -> the static company website. This route claims a short, explicit
+# list of paths on the same host at priority 10, so those paths go to admin-web and
+# everything else still goes to the website.
+#
+# NEVER add /* (or /login, /dashboard, ...) here: that would put the back-office
+# admin login on the public company domain. Only candidate pages and the static
+# assets they load are listed. Asset list measured on 2026-10-08 from the live UAT
+# pages (HTML + every JS/CSS chunk they load):
+#   /_next/*      Next.js chunks, CSS, fonts (/_next/static/media), /_next/image
+#   /images/*     /images/auth-cars.jpg (careers), /images/suwalka-motors-logo-white.png (offer)
+#   /icon.svg     tab icon (<link rel=icon>); the website serves none (404)
+# Deliberately NOT routed:
+#   /favicon.ico  the website has none either, but it is site-wide — taking it would
+#                 change the icon on every website page. Browsers use /icon.svg here.
+#   /firebase-messaging-sw.js, /static/images/logo.svg  only used after a staff
+#                 login (push notifications); never on candidate pages.
+# None of the routed paths collide with the website (/, /css, /img, /js, /about-us,
+# /contact-us, /our-business, /our-network, /privacy-policy, /disclaimer,
+# /terms-and-conditions) EXCEPT /careers, which is intentional: this replaces the
+# website's own /careers page with the live job list.
+#
+# TLS: no new certificate. The SNI is already served by ApisixTls `suwalka-website`
+# (namespace suwalka-website, cert-manager Certificate suwalka-website-tls).
+#
+# METHODS: GET/HEAD only. The candidate pages have no Next server actions; every
+# write (apply, assessment submit) goes straight to api-uat.faithandgamble.in, whose
+# public rules in routes/public-uat.yaml allow this origin in CORS.
+#
+# Namespace sfg-pos-app-uat so serviceName admin-web resolves to the UAT admin-web
+# (the ingress controller only routes to Services in the route's own namespace).
+# Plugins are the same as admin-web-uat (routes/admin-web-uat.yaml).
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: admin-web-uat-candidate-web
+  namespace: sfg-pos-app-uat
+  labels:
+    sfg-project: suwalka
+    sfg-env: uat
+    sfg-auth: public
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — UAT careers + candidate pages on web.suwalkamotors.co.in"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "admin-web:3000"
+spec:
+  ingressClassName: apisix
+  http:
+    - name: admin-web-uat-candidate-web
+      priority: 10
+      match:
+        hosts:
+          - web.suwalkamotors.co.in
+        paths:
+          - /careers
+          - /careers/*
+          - /assessment/*
+          - /offer/*
+          - /gatepass/*
+          - /_next/*
+          - /images/*
+          - /icon.svg
+        methods:
+          - GET
+          - HEAD
+      backends:
+        - serviceName: admin-web
+          servicePort: 3000
+          weight: 100
+      plugins:
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true
+        - name: limit-req
+          enable: true
+          config:
+            rate: 200
+            burst: 200
+            rejected_code: 429
+            key_type: var
+            key: remote_addr
+        - name: response-rewrite
+          enable: true
+          config:
+            headers:
+              set:
+                X-Gateway: sfg-labs
+                X-Project: suwalka
+                X-Env: uat
