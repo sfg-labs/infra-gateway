@@ -1,6 +1,12 @@
-# UAT host for the Suwalka back-office admin web: suwalka-uat.faithandgamble.in
-# Shares the existing APISIX gateway LoadBalancer IP — no new IP/LB.
-# TLS is issued by cert-manager and served by APISIX (ApisixTls).
+# UAT hosts for the Suwalka back-office admin web:
+#   - app.suwalkamotors.co.in        (public address — careers links, LinkedIn, staff)
+#   - suwalka-uat.faithandgamble.in  (original address, kept working as an alias)
+# Both share the existing APISIX gateway LoadBalancer IP — no new IP/LB.
+# TLS is issued by cert-manager and served by APISIX (ApisixTls): the
+# suwalka-uat cert is below; app.suwalkamotors.co.in has its own Certificate +
+# ApisixTls in k8s/app-suwalkamotors-uat-tls.yaml, applied (and Ready) before
+# this route gains the host. A separate cert means a failed HTTP-01 for the new
+# name can never block renewal of the suwalka-uat cert.
 #
 # UNLIKE admin-web-dev.yaml, this is namespace-isolated: it routes to the
 # "admin-web" Service inside sfg-pos-app-uat (own Deployment, own env pointing at
@@ -57,6 +63,7 @@ spec:
       match:
         hosts:
           - suwalka-uat.faithandgamble.in
+          - app.suwalkamotors.co.in
         paths:
           - /*
         methods:
