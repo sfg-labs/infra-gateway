@@ -41,3 +41,31 @@ spec:
             key_type: var
             rate: 200
             rejected_code: 429
+    # Zitadel's /debug/* (metrics, healthz, ready) — answered 404 here, never
+    # proxied (infra-gateway #32). Same sfg-zitadel deployment as the dev host, so
+    # the same /debug/metrics dump was reachable through this host's /* catch-all.
+    # See `zitadel-debug-blocked` in routes/public.yaml for the full note.
+    - name: zitadel-uat-debug-blocked
+      priority: 10
+      match:
+        hosts:
+          - sfg-labs-uat.faithandgamble.in
+        paths:
+          - /debug
+          - /debug/*
+      backends:
+        - serviceName: sfg-zitadel
+          servicePort: 8080
+          weight: 100
+      plugins:
+        - name: uri-blocker
+          enable: true
+          config:
+            block_rules:
+              - "^/debug"
+            rejected_code: 404
+        - name: request-id
+          enable: true
+          config:
+            header_name: X-Request-Id
+            include_in_response: true

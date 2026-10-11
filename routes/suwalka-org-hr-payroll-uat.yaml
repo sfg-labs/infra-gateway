@@ -54,7 +54,7 @@ spec:
     - name: cors
       enable: true
       config:
-        allow_origins: "**"
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in"
         allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
         allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
         allow_credential: true

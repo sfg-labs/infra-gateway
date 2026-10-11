@@ -138,25 +138,71 @@ spec:
         regex_uri:
         - ^/notify/(.*)
         - /api/notify/$1
-    # CORS HERE REFLECTS DEPLOYED REALITY — DO NOT "FIX" IT IN PASSING.
-    #
-    # `allow_origins: '**'` together with `allow_credential: true` is the
-    # classic unsafe CORS combination and will look like a bug. It is recorded
-    # here because it is what is actually running (verified against the live
-    # ApisixRoute, 2026-07-20). The narrower localhost-based origin list that
-    # appears elsewhere in this repo was NEVER applied to this rule.
-    #
-    # Tightening this is a deliberate follow-up with its own testing, not a
-    # drive-by edit. Before narrowing `allow_origins`, the list must be verified
-    # against every real caller (admin-web prod and dev, local dev hosts,
-    # mobile/webview clients, anything else presenting an Origin header) — an
-    # origin missing from that list fails preflight silently, with no ACAO
-    # header and a client-side block that is not visible in gateway logs.
-    # See routes/suwalka-auth.yaml for the same note on the same drift.
+    # CORS ORIGIN LIST (infra-gateway #32). This rule used to carry
+    # `allow_origins: '**'` with `allow_credential: true`, which echoed ANY
+    # website's origin back with credentials allowed. It is now the explicit
+    # first-party list — see the note on the public rule in
+    # routes/suwalka-auth.yaml for what is in it and why. Only `allow_origins`
+    # changed; change it together with that file and
+    # routes/suwalka-org-hr-payroll.yaml.
     - name: cors
       enable: true
       config:
-        allow_origins: "**"
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,POST,OPTIONS"
+        allow_headers: "Authorization,Content-Type,Accept,X-Request-Id"
+        allow_credential: true
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
+  # ------------------------------------------------------------------------
+  # /api/notify/* on the public host — what admin-web actually calls today
+  # (NEXT_PUBLIC_NOTIFY_API_BASE_URL=https://api.faithandgamble.in/api/notify/).
+  #
+  # This rule was created on the cluster by hand and was never in git; it is
+  # recorded here from the live object (read 2026-10-11) so that the CORS
+  # origin list above also covers the path the browser really uses. Apart from
+  # `allow_origins` it is a field-for-field copy of live, including the absent
+  # limit-req/response-rewrite (same reasoning as the /notify/* rule above).
+  # ------------------------------------------------------------------------
+  - name: suwalka-notification-inbox-apiprefix
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /api/notify/*
+      methods:
+      - GET
+      - POST
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-notification
+      servicePort: 3007
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
         allow_methods: "GET,POST,OPTIONS"
         allow_headers: "Authorization,Content-Type,Accept,X-Request-Id"
         allow_credential: true
