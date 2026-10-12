@@ -9,7 +9,7 @@
 #   kubectl -n sfg-gateway create secret generic zitadel-db \
 #     --from-literal=password=YOUR_POSTGRES_PASSWORD
 
-replicaCount: 1   # single-node DOKS cluster — anti-affinity gives no HA on one node
+replicaCount: 2   # two copies so one node loss does not stop logins for dev + UAT (5-node Cantech cluster)
 
 zitadel:
   # The masterkey secret must be created manually before deploy (see above)
