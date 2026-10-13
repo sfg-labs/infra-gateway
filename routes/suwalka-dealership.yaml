@@ -1,0 +1,118 @@
+# Suwalka Dealership (beside Maruti DMS), slice 1 (dev).
+#
+# NEW object: it replaces nothing. Apply by hand on Cantech with `kubectl create -f`
+# (never `apply`), after checking the object does not exist and the Service does:
+#   kubectl -n sfg-pos-app get apisixroute suwalka-dealership   # expect NotFound
+#   kubectl -n sfg-pos-app get svc suwalka-dealership          # expect port 3010
+# Gateway cd.yaml targets the retired DOKS cluster and has not run since 2026-07-09.
+#
+# Namespace follows the live Cantech layout (sfg-pos-app); the ApisixRoute must sit in the
+# same namespace as the suwalka-dealership Service (no serviceNamespace support).
+# CORS, openid-connect, request-id, limit-req and response-rewrite mirror
+# routes/suwalka-org-hr-payroll.yaml as deployed; see the CORS note there before tightening anything.
+apiVersion: apisix.apache.org/v2
+kind: ApisixRoute
+metadata:
+  name: suwalka-dealership
+  namespace: sfg-pos-app
+  labels:
+    sfg-project: suwalka
+    sfg-auth: jwt
+  annotations:
+    sfg-labs.in/description: "Suwalka Motors — Dealership service: DMS uploads, leads, workshop floor"
+    sfg-labs.in/team: "suwalka-team"
+    sfg-labs.in/upstream: "suwalka-dealership:3010"
+spec:
+  ingressClassName: apisix
+  http:
+  # Unauthenticated liveness probes. Exact paths only; everything else under
+  # /api/dealer/* needs a bearer token (rule below).
+  - name: suwalka-dealership-health
+    priority: 10
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /api/dealer/health
+      - /api/dealer/health/scheduler
+      methods:
+      - GET
+    backends:
+    - serviceName: suwalka-dealership
+      servicePort: 3010
+      weight: 100
+    plugins:
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+  - name: suwalka-dealership-api
+    match:
+      hosts:
+      - api.faithandgamble.in
+      paths:
+      - /api/dealer/*
+      methods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      - OPTIONS
+    backends:
+    - serviceName: suwalka-dealership
+      servicePort: 3010
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "**"
+        allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
+        allow_credential: true
+        max_age: 3600
+    - name: openid-connect
+      enable: true
+      config:
+        discovery: https://sfg-labs.faithandgamble.in/.well-known/openid-configuration
+        bearer_only: true
+        client_id: "bearer-only-unused"
+        client_secret: "bearer-only-unused"
+        realm: suwalka
+        use_jwks: true
+        set_userinfo_header: true
+        userinfo_header_name: X-Userinfo
+        set_id_token_header: false
+        set_access_token_header: false
+        token_signing_alg_values_expected: RS256
+        timeout: 3
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+    # DMS uploads: up to 30 files x 25 MB in one multipart request (750 MB).
+    # New in this repo: no other route sets client-control. It is in APISIX's
+    # default plugin list; if the live config lists plugins explicitly and
+    # omits it, drop this block rather than enabling a plugin cluster-wide.
+    - name: client-control
+      enable: true
+      config:
+        max_body_size: 786432000
+    - name: limit-req
+      enable: true
+      config:
+        rate: 60
+        burst: 30
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: response-rewrite
+      enable: true
+      config:
+        headers:
+          set:
+            X-Gateway: sfg-labs
+            X-Project: suwalka
