@@ -43,6 +43,12 @@ KUBECTL
 # $FAKE_SCN/requests.log as "<METHOD> <path> <data>".
 cat >"$BIN/curl" <<'CURL'
 #!/usr/bin/env bash
+# Reject either secret in argv before parsing; fakes alone reach this process.
+for argument in "$@"; do
+  case "$argument" in
+    *fake-igt*|*fake-pat*) echo 'secret appeared in curl argv' >&2; exit 97 ;;
+  esac
+done
 cat >/dev/null  # the --config on stdin (carries the fake PAT)
 method=GET out=/dev/stdout fmt= url= data=
 while [ $# -gt 0 ]; do
@@ -50,7 +56,10 @@ while [ $# -gt 0 ]; do
     -X) method=$2; shift 2 ;;
     -o) out=$2; shift 2 ;;
     -w) fmt=$2; shift 2 ;;
-    -d) data=$2; shift 2 ;;
+    -d|--data-binary)
+      data=$2
+      case "$data" in @*) data=$(cat "${data#@}") ;; esac
+      shift 2 ;;
     -H|--config) shift 2 ;;
     http*) url=$1; shift ;;
     *) shift ;;
@@ -123,7 +132,8 @@ s=$(new_scn happy); run_scn "$s"
 if [ "$RC" = 0 ] && grep -q 'POST flows/2/trigger/4 {"actionIds":\["R1", "A1"\]}' "$s/requests.log" \
   && grep -q 'BEFORE: R1(complementTokenClaims) A1(setIdentityClaims)' <<<"$OUT" \
   && grep -q 'AFTER : R1(complementTokenClaims) A1(setIdentityClaims)' <<<"$OUT" \
-  && grep -q '^Stored' <<<"$OUT"; then ok 'happy path keeps R1, prints before/after, exits 0'; else bad 'happy path'; fi
+  && grep -q '^PUT actions/A1 .*fake-igt' "$s/requests.log" \
+  && grep -q '^Stored' <<<"$OUT"; then ok 'happy path keeps R1, sends token only in body, prints before/after, exits 0'; else bad 'happy path'; fi
 
 # 2. G1: the flows/2 GET fails -> stop BEFORE the trigger POST
 s=$(new_scn flow500); respond "$s" GET_flows_2 500 '{"code":13,"message":"internal"}'; run_scn "$s"
@@ -161,7 +171,8 @@ if [ "$RC" != 0 ] && ! grep -q '^Stored' <<<"$OUT" && grep -q 'boom' <<<"$OUT"; 
 s=$(new_scn create)
 respond "$s" POST_actions__search 200 "$SEARCH_NONE"; respond "$s" POST_actions 200 '{"id":"N1"}'
 respond "$s" GET_flows_2.1 200 "$FLOW_R1"; respond "$s" GET_flows_2.2 200 "$FLOW_R1_N1"; run_scn "$s"
-if [ "$RC" = 0 ] && grep -q 'POST flows/2/trigger/4 {"actionIds":\["R1", "N1"\]}' "$s/requests.log"; then
+if [ "$RC" = 0 ] && grep -q 'POST flows/2/trigger/4 {"actionIds":\["R1", "N1"\]}' "$s/requests.log" \
+  && grep -q '^POST actions .*fake-igt' "$s/requests.log"; then
   ok 'create path merges R1 + N1'; else bad 'create path'; fi
 
 # 10. actions/_search 500 -> stop, no duplicate create

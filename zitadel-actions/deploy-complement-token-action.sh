@@ -333,23 +333,25 @@ name=os.environ['ACTION_NAME']
 print(next((a['id'] for a in (d.get('result') or []) if a.get('name')==name), ''))
 " "$ZTMP/search.json") || { echo "could not read the actions/_search response — aborting" >&2; cat "$ZTMP/search.json" >&2; exit 1; }
 
-PAYLOAD=$(ACTION_NAME="$ACTION_NAME" python3 -c "
+PAYLOAD=$(printf '%s' "$BODY" | ACTION_NAME="$ACTION_NAME" python3 -c "
 import json,sys,os
 print(json.dumps({'name': os.environ['ACTION_NAME'],
                   'script': json.loads(sys.stdin.read()),
                   'timeout': '10s',
                   'allowedToFail': True}))
-" <<<"$BODY")
+")
 
+# Keep the embedded internal-grant token out of curl's argv and disk. FD 3 is
+# a pipe carrying the body; stdin remains available for the PAT curl config.
 if [ -n "$EXISTING" ]; then
   echo "updating existing action $EXISTING"
   zcall update -X PUT "$ISSUER/management/v1/actions/$EXISTING" \
-    -H 'Content-Type: application/json' -d "$PAYLOAD"
+    -H 'Content-Type: application/json' --data-binary @/dev/fd/3 3< <(printf '%s' "$PAYLOAD")
   ACTION_ID="$EXISTING"
 else
   echo "creating action"
   zcall create -X POST "$ISSUER/management/v1/actions" \
-    -H 'Content-Type: application/json' -d "$PAYLOAD"
+    -H 'Content-Type: application/json' --data-binary @/dev/fd/3 3< <(printf '%s' "$PAYLOAD")
   ACTION_ID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('id',''))" "$ZTMP/create.json" 2>/dev/null || true)
   [ -n "$ACTION_ID" ] || { echo "create returned 2xx but no action id — aborting. Response body:" >&2; cat "$ZTMP/create.json" >&2; exit 1; }
 fi
