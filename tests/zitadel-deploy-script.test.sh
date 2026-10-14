@@ -128,12 +128,14 @@ bad() {
 attached() { grep -q '^POST flows/2/trigger/' "$1/requests.log" 2>/dev/null; }
 
 # 1. happy path, existing action: list kept, before/after printed, exit 0
-s=$(new_scn happy); run_scn "$s"
-if [ "$RC" = 0 ] && grep -q 'POST flows/2/trigger/4 {"actionIds":\["R1", "A1"\]}' "$s/requests.log" \
+s=$(new_scn happy)
+respond "$s" POST_flows_2_trigger_4 400 '{"code":9,"message":"NoChanges COMMAND-Nfh52"}'
+run_scn "$s"
+if [ "$RC" = 0 ] && ! attached "$s" && [ "$(grep -c '^GET flows/2 ' "$s/requests.log")" = 2 ] \
   && grep -q 'BEFORE: R1(complementTokenClaims) A1(setIdentityClaims)' <<<"$OUT" \
   && grep -q 'AFTER : R1(complementTokenClaims) A1(setIdentityClaims)' <<<"$OUT" \
   && grep -q '^PUT actions/A1 .*fake-igt' "$s/requests.log" \
-  && grep -q '^Stored' <<<"$OUT"; then ok 'happy path keeps R1, sends token only in body, prints before/after, exits 0'; else bad 'happy path'; fi
+  && grep -q '^Stored' <<<"$OUT"; then ok 'unchanged trigger skips NoChanges attach, still verifies twice and updates action securely'; else bad 'unchanged trigger'; fi
 
 # 2. G1: the flows/2 GET fails -> stop BEFORE the trigger POST
 s=$(new_scn flow500); respond "$s" GET_flows_2 500 '{"code":13,"message":"internal"}'; run_scn "$s"
@@ -164,7 +166,7 @@ if [ "$RC" != 0 ] && grep -q 'missing: R1' <<<"$OUT" && ! grep -q '^Stored' <<<"
   ok 'post-attach re-read missing R1 exits non-zero and names it'; else bad 'post-attach re-read'; fi
 
 # 8. attach 500 -> non-zero, no "Stored"
-s=$(new_scn attach500); respond "$s" POST_flows_2_trigger_4 500 '{"message":"boom"}'; run_scn "$s"
+s=$(new_scn attach500); respond "$s" GET_flows_2.1 200 "$FLOW_R1"; respond "$s" POST_flows_2_trigger_4 500 '{"message":"boom"}'; run_scn "$s"
 if [ "$RC" != 0 ] && ! grep -q '^Stored' <<<"$OUT" && grep -q 'boom' <<<"$OUT"; then ok 'attach 500 exits non-zero'; else bad 'attach 500'; fi
 
 # 9. new action: create -> id N1 appended after R1
@@ -189,7 +191,19 @@ if [ "$RC" = 1 ] && [ "$(wc -l <"$s/requests.log")" -eq 1 ]; then ok 'precheck n
 s=$(new_scn flatkey)
 respond "$s" GET_flows_2 200 '{"flow":{"triggerActions":[{"triggerType":{"id":"4","key":"PreUserinfoCreation"},"actions":[{"id":"R1","name":"complementTokenClaims"},{"id":"A1","name":"setIdentityClaims"}]}]}}'
 run_scn "$s"
-if [ "$RC" = 0 ] && grep -q '"actionIds":\["R1", "A1"\]' "$s/requests.log"; then ok 'flat triggerType.key shape parsed'; else bad 'flat key shape'; fi
+if [ "$RC" = 0 ] && ! attached "$s" && grep -q 'AFTER : R1(complementTokenClaims) A1(setIdentityClaims)' <<<"$OUT"; then ok 'flat triggerType.key shape parsed'; else bad 'flat key shape'; fi
+
+# 13. existing action not yet attached: append it without losing existing actions.
+s=$(new_scn existing-missing)
+respond "$s" GET_flows_2.1 200 "$FLOW_R1"; run_scn "$s"
+if [ "$RC" = 0 ] && grep -q 'POST flows/2/trigger/4 {"actionIds":\["R1", "A1"\]}' "$s/requests.log"; then
+  ok 'existing unattached action is appended and verified'; else bad 'existing action attach'; fi
+
+# 14. skipping an unchanged write must not skip verification of the live list.
+s=$(new_scn unchanged-read-fails)
+respond "$s" GET_flows_2.2 500 '{"message":"verification unavailable"}'; run_scn "$s"
+if [ "$RC" != 0 ] && ! attached "$s" && ! grep -q '^Stored' <<<"$OUT"; then
+  ok 'unchanged trigger still fails when verification cannot be read'; else bad 'unchanged verification'; fi
 
 echo
 echo "$PASS/$((PASS + FAIL)) passed"
