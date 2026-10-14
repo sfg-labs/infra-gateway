@@ -81,7 +81,12 @@ function complementTokenClaims(ctx, api) {
   }
 
   var result = body && body.result;
-  if (!result) return;
+  if (!result) {
+    // A 200 with no `result` is a resolver contract break, not "no grants" —
+    // say so, or it reads exactly like a user who holds nothing.
+    logger.log('suwalka claim resolver 200 without a result field; no claims set; sub=' + sub);
+    return;
+  }
 
   // ── WRITE TO BOTH SURFACES. THIS IS THE WHOLE FIX. ──────────────────────
   //
@@ -107,11 +112,26 @@ function complementTokenClaims(ctx, api) {
   // available, Zitadel throws, and a single try around both would silently
   // drop the surface that WAS available.
   //
-  // A throw is still LOGGED: "surface absent on this trigger" is the expected
-  // case, but a rejected value would otherwise vanish with no trace.
+  // Two failures are EXPECTED and stay quiet, so the log is not noise on every
+  // login: a surface this trigger does not offer (checked up front rather than
+  // provoked as a TypeError), and "already exists" — a key an earlier Action set
+  // from metadata, which wins; the UAT Action filters the same string. Any
+  // other throw is a REJECTED value and is logged, or it would vanish.
+  function setOn(where, surface, key, value) {
+    // Only a MISSING surface is skipped. A present one is always called, so a
+    // setClaim the runtime does not expose as a plain function throws and is
+    // logged below rather than silently skipping every claim.
+    if (!surface) return;
+    try {
+      surface.setClaim(key, value);
+    } catch (e) {
+      if (String(e).indexOf('already exists') < 0) logger.log(where + '.setClaim(' + key + ') failed', e);
+    }
+  }
+  var v1 = (api && api.v1) || {};
   function setBoth(key, value) {
-    try { api.v1.userinfo.setClaim(key, value); } catch (e) { logger.log('userinfo.setClaim(' + key + ') failed', e); }
-    try { api.v1.claims.setClaim(key, value); } catch (e) { logger.log('claims.setClaim(' + key + ') failed', e); }
+    setOn('userinfo', v1.userinfo, key, value);
+    setOn('claims', v1.claims, key, value);
   }
 
   if (result.suwalka_admin && result.suwalka_admin.length) {

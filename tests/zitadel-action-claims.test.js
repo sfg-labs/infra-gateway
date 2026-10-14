@@ -269,6 +269,44 @@ check('dev Action: a setClaim that throws is LOGGED, not swallowed', () => {
     `no log line for the failed setClaim; got ${JSON.stringify(logged)}`);
 });
 
+// Runs the dev Action with a custom `api.v1` and returns what was logged.
+function runDevWith(v1, result) {
+  logged.length = 0;
+  nextResponse = { status: 200, json: () => (result === undefined ? { error: false } : { result }) };
+  assert.doesNotThrow(() => complementTokenClaims({ v1: { getUser: () => ({ id: 'sub-1' }) } }, { v1 }),
+    'the dev Action must never block login');
+  return logged.slice();
+}
+
+check('dev Action: a 200 without `result` sets nothing and LOGS it', () => {
+  const set = {};
+  const log = runDevWith({ userinfo: { setClaim: (k, v) => { set[k] = v; } } }, undefined);
+  assert.deepStrictEqual(set, {});
+  assert.ok(log.some((l) => l.includes('200 without a result field') && l.includes('sub-1')), JSON.stringify(log));
+});
+
+check('dev Action: a surface ABSENT on this trigger is quiet, the other still set', () => {
+  const claims = {};
+  const log = runDevWith({ claims: { setClaim: (k, v) => { claims[k] = v; } } }, { suwalka_caps: ['hrms:org'] });
+  assert.deepStrictEqual(claims.suwalka_caps, ['hrms:org']);
+  assert.ok(!log.some((l) => l.includes('setClaim')), `expected no setClaim log; got ${JSON.stringify(log)}`);
+});
+
+check('dev Action: "already exists" is quiet (metadata wins); the other surface still set', () => {
+  const claims = {};
+  const log = runDevWith({
+    userinfo: { setClaim: () => { throw new Error('key already exists'); } },
+    claims: { setClaim: (k, v) => { claims[k] = v; } },
+  }, { suwalka_dealer: DEALER });
+  assertDealerWithAt(claims.suwalka_dealer, 'claims after userinfo refused');
+  assert.ok(!log.some((l) => l.includes('setClaim')), `expected no setClaim log; got ${JSON.stringify(log)}`);
+});
+
+check('dev Action: a present surface whose setClaim is not callable is LOGGED, not skipped', () => {
+  const log = runDevWith({ userinfo: {}, claims: { setClaim: () => {} } }, { suwalka_caps: ['hrms:org'] });
+  assert.ok(log.some((l) => l.includes('userinfo.setClaim(suwalka_caps) failed')), JSON.stringify(log));
+});
+
 check('dealer null is NOT sent (no pack = no claim)', () => {
   assert.ok(!('suwalka_dealer' in run({ suwalka_dealer: null })));
 });

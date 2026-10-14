@@ -53,6 +53,29 @@ a dealership service with `DEALER_ACCESS_SOURCE=claim` gives nobody dealer acces
    (next login; existing access tokens are unaffected until they're refreshed
    or a new login happens).
 
+## Steps (Management API script, dev)
+
+`deploy-complement-token-action.sh` does steps 2–4 through the Management API
+(run `--dry-run` first). What to expect from it:
+
+- **Every request is checked.** A non-2xx, a curl/network error, or a response it
+  cannot read stops the run with exit **1** and prints the response body. A 403 on
+  the opening precheck exits **2** and nothing is changed.
+- **The trigger list is merged, never replaced.** It reads the Pre Userinfo creation
+  trigger first and prints `BEFORE: id(name) …`, writes existing ∪ this Action, then
+  re-reads and prints `AFTER : …`. If the trigger cannot be read with certainty it
+  stops *before* writing; if the re-read is missing any Action that was there before
+  (for example `complementTokenClaims`, which carries the `roles` claim) it exits 1
+  and names the missing id — re-attach it by hand at once.
+- The trigger id is taken from the live flow. Set `TRIGGER_ID` only if the trigger
+  has no Actions yet.
+- A run that stops after `update`/`create` but before `attach` has changed the Action
+  only; the trigger is untouched.
+- "Stored" is printed only after the re-read check passes — and is still not proof the
+  claims arrive; do the check below.
+
+Offline test (fake kubectl/curl, contacts nothing): `bash tests/zitadel-deploy-script.test.sh`.
+
 ## Verifying it worked
 
 Log in again in the browser, then decode the new access/id token (or check

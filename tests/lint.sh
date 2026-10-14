@@ -26,7 +26,7 @@ fi
 echo ""
 echo "===> [2/2] Shell script lint (shellcheck)"
 if command -v shellcheck &>/dev/null; then
-  for f in k3s/*.sh helm/deploy.sh tests/*.sh tests/smoke/*.sh; do
+  for f in k3s/*.sh helm/deploy.sh tests/*.sh tests/smoke/*.sh zitadel-actions/*.sh; do
     if shellcheck "$f" &>/dev/null; then
       pass "$f"
     else
