@@ -66,6 +66,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 path=${url#*/management/v1/}
+if [ "$method" = GET ] && [[ "$path" == actions/* ]] && [ "$out" != /dev/stdout ]; then
+  echo 'Action response must not be written to disk' >&2
+  exit 96
+fi
 key="${method}_$(printf '%s' "$path" | tr '/' '_')"
 n_file="$FAKE_SCN/.count_$key"
 n=$(( $(cat "$n_file" 2>/dev/null || echo 0) + 1 ))
@@ -83,7 +87,10 @@ if [ ! -e "$base.code" ]; then
   exit 7
 fi
 cat "$base.body" >"$out" 2>/dev/null || : >"$out"
-[ -n "$fmt" ] && printf '%s' "$(cat "$base.code")"
+if [ -n "$fmt" ]; then
+  [[ "$fmt" == *'\n'* ]] && printf '\n'
+  printf '%s' "$(cat "$base.code")"
+fi
 exit 0
 CURL
 chmod +x "$BIN/kubectl" "$BIN/curl"
@@ -105,6 +112,16 @@ new_scn() {
   mkdir -p "$s"
   respond "$s" POST_actions__search 200 "$SEARCH_EXISTING"
   respond "$s" PUT_actions_A1 200 '{}'
+  python3 - "$ROOT/zitadel-actions/complementTokenClaims.js" "$s" <<'PYFIXTURE'
+import json, pathlib, re, sys
+src = pathlib.Path(sys.argv[1]).read_text().replace("'<set-me-in-the-zitadel-console-only>'", json.dumps('fake-igt'))
+src = re.sub(r'\bfunction\s+complementTokenClaims\s*\(', 'function setIdentityClaims(', src)
+action = {'action': {'name': 'setIdentityClaims', 'script': src, 'timeout': '10.000s', 'allowedToFail': True}}
+pathlib.Path(sys.argv[2], 'desired-action.json').write_text(json.dumps(action))
+PYFIXTURE
+  respond "$s" GET_actions_A1.1 200 '{"action":{"name":"setIdentityClaims","script":"old script","timeout":"10s","allowedToFail":true}}'
+  respond "$s" GET_actions_A1 200 "$(cat "$s/desired-action.json")"
+  respond "$s" GET_actions_N1 200 "$(cat "$s/desired-action.json")"
   respond "$s" POST_flows_2_trigger_4 200 '{}'
   respond "$s" GET_flows_2 200 "$FLOW_R1_A1"
   echo "$s"
@@ -204,6 +221,44 @@ s=$(new_scn unchanged-read-fails)
 respond "$s" GET_flows_2.2 500 '{"message":"verification unavailable"}'; run_scn "$s"
 if [ "$RC" != 0 ] && ! attached "$s" && ! grep -q '^Stored' <<<"$OUT"; then
   ok 'unchanged trigger still fails when verification cannot be read'; else bad 'unchanged verification'; fi
+
+# 15. Unchanged action must not call PUT, even when provider refuses no-op updates.
+s=$(new_scn unchanged-action)
+respond "$s" GET_actions_A1.1 200 "$(cat "$s/desired-action.json")"
+respond "$s" PUT_actions_A1 400 '{"code":9,"message":"NoChanges ACTION-dg4t2"}'
+run_scn "$s"
+if [ "$RC" = 0 ] && ! grep -q '^PUT actions/' "$s/requests.log" && [ "$(grep -c '^GET actions/A1 ' "$s/requests.log")" = 2 ]; then
+  ok 'unchanged normalized Action skips PUT and verifies stored content'; else bad 'unchanged Action update'; fi
+
+# 16. Unreadable before-state must fail closed without an update or attach.
+s=$(new_scn action-read-fails); respond "$s" GET_actions_A1.1 500 '{"message":"read unavailable"}'; run_scn "$s"
+if [ "$RC" != 0 ] && ! grep -q '^PUT actions/' "$s/requests.log" && ! attached "$s"; then
+  ok 'failed Action read aborts before mutation'; else bad 'Action pre-read'; fi
+
+# 17. A successful update with mismatched content is not accepted.
+s=$(new_scn action-mismatch)
+respond "$s" GET_actions_A1 200 '{"action":{"name":"setIdentityClaims","script":"wrong script","timeout":"10s","allowedToFail":true}}'
+run_scn "$s"
+if [ "$RC" != 0 ] && ! attached "$s" && ! grep -q '^Stored' <<<"$OUT"; then
+  ok 'post-update mismatch stops before trigger changes'; else bad 'Action verification mismatch'; fi
+
+# 18. Verification is mandatory even when the initial Action was identical.
+s=$(new_scn action-verify-fails)
+respond "$s" GET_actions_A1.1 200 "$(cat "$s/desired-action.json")"
+respond "$s" GET_actions_A1 500 '{"message":"verify unavailable"}'
+run_scn "$s"
+if [ "$RC" != 0 ] && ! grep -q '^PUT actions/' "$s/requests.log" && ! attached "$s"; then
+  ok 'unchanged Action still fails on verification read error'; else bad 'Action verify read'; fi
+
+# 19. Missing settings are not treated as an identical Action.
+s=$(new_scn action-malformed); respond "$s" GET_actions_A1.1 200 '{"action":{"name":"setIdentityClaims"}}'; run_scn "$s"
+if [ "$RC" != 0 ] && ! grep -q '^PUT actions/' "$s/requests.log" && ! attached "$s"; then
+  ok 'malformed Action response fails closed'; else bad 'malformed Action'; fi
+
+# 20. Action error payloads may contain scripts/secrets and must be suppressed.
+s=$(new_scn action-error-secret); respond "$s" GET_actions_A1.1 500 '{"script":"fake-igt"}'; run_scn "$s"
+if [ "$RC" != 0 ] && ! grep -q 'fake-igt' <<<"$OUT" && grep -q 'response suppressed' <<<"$OUT"; then
+  ok 'Action response remains memory-only and error body is suppressed'; else bad 'Action error redaction'; fi
 
 echo
 echo "$PASS/$((PASS + FAIL)) passed"
