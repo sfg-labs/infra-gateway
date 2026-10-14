@@ -341,12 +341,59 @@ print(json.dumps({'name': os.environ['ACTION_NAME'],
                   'allowedToFail': True}))
 ")
 
+# Action reads contain the embedded internal token: keep the response in memory,
+# never in zcall's diagnostic files, and never print response bodies on errors.
+read_action() {
+  local label=$1 response code
+  if ! response=$(zcurl -w '\n%{http_code}' "$ISSUER/management/v1/actions/$2"); then
+    echo "$label: request failed (network/TLS); response suppressed" >&2
+    exit 1
+  fi
+  code=${response##*$'\n'}
+  case "$code" in
+    2??) ACTION_RESPONSE=${response%$'\n'*} ;;
+    *) echo "$label: HTTP $code; response suppressed" >&2; exit 1 ;;
+  esac
+  echo "$label: HTTP $code"
+}
+
+# Compare only writable fields, without printing either script (contains a secret).
+# The API may normalize protobuf durations, e.g. 10s -> 10.000s.
+action_matches() {
+  printf '%s' "$PAYLOAD" | python3 -c '
+import json, sys
+from decimal import Decimal, InvalidOperation
+try:
+    desired = json.load(sys.stdin)
+    stored = json.load(open("/dev/fd/3"))["action"]
+    if not isinstance(stored, dict) or not isinstance(stored.get("script"), str):
+        raise ValueError("invalid action")
+    def duration(value):
+        if not isinstance(value, str) or not value.endswith("s"):
+            raise ValueError("invalid timeout")
+        return Decimal(value[:-1])
+    same = (stored.get("name") == desired["name"]
+            and stored["script"] == desired["script"]
+            and duration(stored.get("timeout")) == duration(desired["timeout"])
+            and stored.get("allowedToFail", False) is desired["allowedToFail"])
+    print("yes" if same else "no")
+except (KeyError, ValueError, TypeError, InvalidOperation):
+    raise SystemExit("Action response is incomplete or unreadable; refusing to continue")
+' 3< <(printf '%s' "$ACTION_RESPONSE")
+}
+
 # Keep the embedded internal-grant token out of curl's argv and disk. FD 3 is
 # a pipe carrying the body; stdin remains available for the PAT curl config.
 if [ -n "$EXISTING" ]; then
-  echo "updating existing action $EXISTING"
-  zcall update -X PUT "$ISSUER/management/v1/actions/$EXISTING" \
-    -H 'Content-Type: application/json' --data-binary @/dev/fd/3 3< <(printf '%s' "$PAYLOAD")
+  read_action action-before "$EXISTING"
+  MATCH=$(action_matches)
+  if [ "$MATCH" = yes ]; then
+    echo "existing action $EXISTING is unchanged; skipping update"
+  else
+    echo "updating existing action $EXISTING"
+    zcall update -X PUT "$ISSUER/management/v1/actions/$EXISTING" \
+      -H 'Content-Type: application/json' --data-binary @/dev/fd/3 3< <(printf '%s' "$PAYLOAD")
+  fi
   ACTION_ID="$EXISTING"
 else
   echo "creating action"
@@ -355,6 +402,10 @@ else
   ACTION_ID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('id',''))" "$ZTMP/create.json" 2>/dev/null || true)
   [ -n "$ACTION_ID" ] || { echo "create returned 2xx but no action id — aborting. Response body:" >&2; cat "$ZTMP/create.json" >&2; exit 1; }
 fi
+# Both changed and unchanged paths require a fresh authoritative verification.
+read_action action-after "$ACTION_ID"
+MATCH=$(action_matches)
+[ "$MATCH" = yes ] || { echo "stored Action does not match the intended script/settings — aborting" >&2; exit 1; }
 echo "action id: $ACTION_ID"
 
 # Flow 2 = COMPLEMENT_TOKEN; the Pre Userinfo creation trigger.
