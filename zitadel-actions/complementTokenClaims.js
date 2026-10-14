@@ -2,7 +2,7 @@
  * Zitadel Action — Complement Token flow, "Pre Userinfo creation" trigger.
  *
  * Mints suwalka_admin / suwalka_caps / suwalka_identity / suwalka_outlet_set /
- * suwalka_dept_set / suwalka_grant_caps / suwalka_levels custom claims into the
+ * suwalka_dept_set / suwalka_grant_caps / suwalka_levels / suwalka_dealer custom claims into the
  * userinfo response (which APISIX's
  * openid-connect plugin forwards to every backend service as the base64 JSON
  * X-Userinfo header, decoded by @suwalka/common's readUser()).
@@ -150,5 +150,16 @@ function complementTokenClaims(ctx, api) {
   // undeployed Action indistinguishable from a caller who holds no levels.
   if (Array.isArray(result.suwalka_levels)) {
     setBoth('suwalka_levels', result.suwalka_levels);
+  }
+
+  // suwalka_dealer — the dealership access claim (slice 2, 2026-10-14).
+  //
+  // An OBJECT { v, pack, fn, m, x }, or null when the job title has no access
+  // pack. Unlike suwalka_grant_caps there is NO third state: absent means "no
+  // dealership access" to every consumer (@suwalka/common readDealerAccess
+  // returns null), so null is simply not sent. Pass the object through
+  // VERBATIM — consumers validate it; the Action must not reshape it.
+  if (result.suwalka_dealer && typeof result.suwalka_dealer === 'object' && !Array.isArray(result.suwalka_dealer)) {
+    setBoth('suwalka_dealer', result.suwalka_dealer);
   }
 }

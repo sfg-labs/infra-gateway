@@ -1,7 +1,7 @@
 # Zitadel Complement Token Action — suwalka claims
 
 Mints `suwalka_admin` / `suwalka_caps` / `suwalka_identity` / `suwalka_outlet_set` /
-`suwalka_dept_set` custom claims into the token Zitadel issues, so they reach
+`suwalka_dept_set` / `suwalka_grant_caps` / `suwalka_levels` / `suwalka_dealer` custom claims into the token Zitadel issues, so they reach
 every backend service via APISIX's `X-Userinfo` header. Without this Action,
 `req.user.caps` (and `.adminGrants`, `.employeeId`, etc.) is always empty for
 every user, and any endpoint gated by `resolveModuleScopeFilter` (e.g.
@@ -14,6 +14,17 @@ Actions live in Zitadel's own database, configured through its Console UI (or
 Management API, which this workspace has no credentials for). This directory
 exists purely so the Action source is version-controlled and reviewable; you
 must paste it into the Console by hand.
+
+### `suwalka_dealer` (dealership slice 2, 2026-10-14)
+
+An OBJECT `{ v, pack, fn, m, x }` from org-hr's by-sub resolver, or `null` when the
+person's job title has no access pack. The Action sends it only when it is an object,
+verbatim; absent means **no dealership access** (there is no "pre-claim, allow" state).
+Both `complementTokenClaims.js` (dev) and `uat/setIdentityClaimsLive.js` (UAT) carry the line.
+
+**Apply only after the org-hr build that returns `suwalka_dealer` from by-sub is deployed
+to that environment (slice 2 Q1); before that the line is inert.** Until it is applied,
+a dealership service with `DEALER_ACCESS_SOURCE=claim` gives nobody dealer access.
 
 ## Steps (Zitadel Console)
 

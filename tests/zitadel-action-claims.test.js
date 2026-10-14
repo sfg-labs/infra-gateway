@@ -221,6 +221,51 @@ check('one surface throwing does not suppress the other', () => {
   assert.deepStrictEqual(claims.suwalka_caps, ['hrms:org']);
 });
 
+// --- suwalka_dealer: an OBJECT or absent. Absent = no dealership access. ---
+
+const DEALER = {
+  v: 1, pack: 'teamlead', fn: ['customer-care'],
+  m: { 'dealer-voice': ['subtree', 'edit', 1] },
+  x: [{ m: 'dealer-leads', outlet: '11111111-2222-3333-4444-555555555555', from: '2026-11-01', to: '2026-11-14', a: 'edit', f: [] }],
+};
+
+check('dealer object reaches BOTH surfaces verbatim', () => {
+  const { userinfo, claims } = runBoth({ suwalka_dealer: DEALER });
+  assert.deepStrictEqual(userinfo.suwalka_dealer, DEALER);
+  assert.deepStrictEqual(claims.suwalka_dealer, DEALER);
+});
+
+check('dealer null is NOT sent (no pack = no claim)', () => {
+  assert.ok(!('suwalka_dealer' in run({ suwalka_dealer: null })));
+});
+
+check('dealer array or string is NOT sent — only an object is a claim', () => {
+  assert.ok(!('suwalka_dealer' in run({ suwalka_dealer: [DEALER] })));
+  assert.ok(!('suwalka_dealer' in run({ suwalka_dealer: 'teamlead' })));
+});
+
+// --- the UAT Action carries the same line ---
+
+function loadNamed(file, fnName) {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'zitadel-actions', file), 'utf8');
+  // eslint-disable-next-line no-new-func
+  return new Function('require', 'module', 'exports', `${src}\nreturn ${fnName};`)(require, { exports: {} }, {});
+}
+
+check('UAT setIdentityClaimsLive passes suwalka_dealer to userinfo, drops null', () => {
+  const live = loadNamed('uat/setIdentityClaimsLive.js', 'setIdentityClaimsLive');
+  const call = (result) => {
+    nextResponse = { status: 200, json: () => ({ result }) };
+    const userinfo = {};
+    const api = { v1: { userinfo: { setClaim: (k, v) => { userinfo[k] = v; } }, claims: { setClaim: () => {} } } };
+    live({ v1: { getUser: () => ({ id: 'sub-1' }) } }, api);
+    return userinfo;
+  };
+  assert.deepStrictEqual(call({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: DEALER }).suwalka_dealer, DEALER);
+  assert.ok(!('suwalka_dealer' in call({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: null })));
+  assert.ok(!('suwalka_dealer' in call({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: [DEALER] })));
+});
+
 let failed = 0;
 for (const [name, fn] of checks) {
   try {
