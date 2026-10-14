@@ -106,9 +106,12 @@ function complementTokenClaims(ctx, api) {
   // Each call is wrapped separately: on a trigger where one surface is not
   // available, Zitadel throws, and a single try around both would silently
   // drop the surface that WAS available.
+  //
+  // A throw is still LOGGED: "surface absent on this trigger" is the expected
+  // case, but a rejected value would otherwise vanish with no trace.
   function setBoth(key, value) {
-    try { api.v1.userinfo.setClaim(key, value); } catch (e) { /* surface absent on this trigger */ }
-    try { api.v1.claims.setClaim(key, value); } catch (e) { /* surface absent on this trigger */ }
+    try { api.v1.userinfo.setClaim(key, value); } catch (e) { logger.log('userinfo.setClaim(' + key + ') failed', e); }
+    try { api.v1.claims.setClaim(key, value); } catch (e) { logger.log('claims.setClaim(' + key + ') failed', e); }
   }
 
   if (result.suwalka_admin && result.suwalka_admin.length) {
@@ -158,8 +161,20 @@ function complementTokenClaims(ctx, api) {
   // pack. Unlike suwalka_grant_caps there is NO third state: absent means "no
   // dealership access" to every consumer (@suwalka/common readDealerAccess
   // returns null), so null is simply not sent. Pass the object through
-  // VERBATIM — consumers validate it; the Action must not reshape it.
+  // as received — consumers validate it; the Action must not reshape it —
+  // with ONE addition: `at`, the mint time in integer epoch seconds.
+  //
+  // Why `at`: @suwalka/common refuses a dealer claim older than 1 h (claim
+  // staleness, lost-phone window). It cannot use the token's `iat`, because
+  // X-Userinfo is the USERINFO response (see above), which carries no `iat`.
+  // Userinfo is built per call, so `at` is fresh on each userinfo call — that
+  // is fine: it then dates the claim from the org-hr read made in that call.
   if (result.suwalka_dealer && typeof result.suwalka_dealer === 'object' && !Array.isArray(result.suwalka_dealer)) {
-    setBoth('suwalka_dealer', result.suwalka_dealer);
+    var dealer = {};
+    for (var k in result.suwalka_dealer) {
+      if (Object.prototype.hasOwnProperty.call(result.suwalka_dealer, k)) dealer[k] = result.suwalka_dealer[k];
+    }
+    dealer.at = Math.floor(Date.now() / 1000);
+    setBoth('suwalka_dealer', dealer);
   }
 }

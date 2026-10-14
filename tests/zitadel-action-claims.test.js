@@ -24,14 +24,20 @@ const ACTION_PATH = path.join(__dirname, '..', 'zitadel-actions', 'complementTok
 
 // The Action calls require('zitadel/http') and require('zitadel/log'), neither of
 // which exists outside Zitadel. Intercept just those two.
+//
+// `nextResponse` may be a function: it is then called, so a check can make the
+// fetch throw. `logged` records every logger.log call, so a check can prove a
+// failure was REPORTED and not just survived.
 let nextResponse;
+const logged = [];
+const stubLogger = { log: (...args) => { logged.push(args.map(String).join(' ')); } };
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   if (request === 'zitadel/http') {
-    return { fetch: () => nextResponse };
+    return { fetch: () => (typeof nextResponse === 'function' ? nextResponse() : nextResponse) };
   }
   if (request === 'zitadel/log') {
-    return { log: () => {} };
+    return stubLogger;
   }
   return originalLoad.apply(this, arguments);
 };
@@ -229,10 +235,38 @@ const DEALER = {
   x: [{ m: 'dealer-leads', outlet: '11111111-2222-3333-4444-555555555555', from: '2026-11-01', to: '2026-11-14', a: 'edit', f: [] }],
 };
 
-check('dealer object reaches BOTH surfaces verbatim', () => {
+// The claim as received, plus `at`. Returns `at` so callers can bound it.
+function assertDealerWithAt(got, label) {
+  assert.ok(got && typeof got === 'object', `${label}: suwalka_dealer missing`);
+  const { at, ...rest } = got;
+  assert.deepStrictEqual(rest, DEALER, `${label}: claim body was reshaped`);
+  assert.ok(Number.isInteger(at), `${label}: at must be integer epoch seconds, got ${at}`);
+  return at;
+}
+
+check('dealer object reaches BOTH surfaces as received, plus `at` = mint time in integer seconds', () => {
+  const before = Math.floor(Date.now() / 1000);
   const { userinfo, claims } = runBoth({ suwalka_dealer: DEALER });
-  assert.deepStrictEqual(userinfo.suwalka_dealer, DEALER);
-  assert.deepStrictEqual(claims.suwalka_dealer, DEALER);
+  const after = Math.floor(Date.now() / 1000);
+  for (const [label, got] of [['userinfo', userinfo.suwalka_dealer], ['claims', claims.suwalka_dealer]]) {
+    const at = assertDealerWithAt(got, label);
+    assert.ok(at >= before && at <= after, `${label}: at ${at} not within [${before}, ${after}]`);
+  }
+  assert.ok(!('at' in DEALER), 'the resolver payload must not be mutated');
+});
+
+check('dev Action: a setClaim that throws is LOGGED, not swallowed', () => {
+  logged.length = 0;
+  nextResponse = { status: 200, json: () => ({ result: { suwalka_dealer: DEALER } }) };
+  const api = {
+    v1: {
+      userinfo: { setClaim: () => { throw new Error('value rejected'); } },
+      claims: { setClaim: () => {} },
+    },
+  };
+  complementTokenClaims({ v1: { getUser: () => ({ id: 'sub-1' }) } }, api);
+  assert.ok(logged.some((l) => l.includes('userinfo.setClaim(suwalka_dealer) failed') && l.includes('value rejected')),
+    `no log line for the failed setClaim; got ${JSON.stringify(logged)}`);
 });
 
 check('dealer null is NOT sent (no pack = no claim)', () => {
@@ -252,18 +286,64 @@ function loadNamed(file, fnName) {
   return new Function('require', 'module', 'exports', `${src}\nreturn ${fnName};`)(require, { exports: {} }, {});
 }
 
-check('UAT setIdentityClaimsLive passes suwalka_dealer to userinfo, drops null', () => {
-  const live = loadNamed('uat/setIdentityClaimsLive.js', 'setIdentityClaimsLive');
-  const call = (result) => {
-    nextResponse = { status: 200, json: () => ({ result }) };
-    const userinfo = {};
-    const api = { v1: { userinfo: { setClaim: (k, v) => { userinfo[k] = v; } }, claims: { setClaim: () => {} } } };
-    live({ v1: { getUser: () => ({ id: 'sub-1' }) } }, api);
-    return userinfo;
+const live = loadNamed('uat/setIdentityClaimsLive.js', 'setIdentityClaimsLive');
+
+// Runs the UAT Action with `response` as the fetch result (or a function to call
+// instead, e.g. one that throws). Returns both surfaces and what was logged.
+function runLive(response, { userinfoSet, claimsSet } = {}) {
+  logged.length = 0;
+  nextResponse = response;
+  const userinfo = {};
+  const claims = {};
+  const api = {
+    v1: {
+      userinfo: { setClaim: userinfoSet || ((k, v) => { userinfo[k] = v; }) },
+      claims: { setClaim: claimsSet || ((k, v) => { claims[k] = v; }) },
+    },
   };
-  assert.deepStrictEqual(call({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: DEALER }).suwalka_dealer, DEALER);
-  assert.ok(!('suwalka_dealer' in call({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: null })));
-  assert.ok(!('suwalka_dealer' in call({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: [DEALER] })));
+  assert.doesNotThrow(() => live({ v1: { getUser: () => ({ id: 'sub-1' }) } }, api), 'the UAT Action must never block login');
+  return { userinfo, claims, logged: logged.slice() };
+}
+const ok = (result) => ({ status: 200, json: () => ({ result }) });
+
+check('UAT setIdentityClaimsLive passes suwalka_dealer (+ at) to BOTH surfaces, drops null and arrays', () => {
+  const { userinfo, claims } = runLive(ok({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: DEALER }));
+  assertDealerWithAt(userinfo.suwalka_dealer, 'UAT userinfo');
+  assertDealerWithAt(claims.suwalka_dealer, 'UAT claims');
+  assert.ok(!('suwalka_dealer' in runLive(ok({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: null })).userinfo));
+  assert.ok(!('suwalka_dealer' in runLive(ok({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: [DEALER] })).userinfo));
+});
+
+check('UAT: a non-200 sets nothing and logs the status', () => {
+  const r = runLive({ status: 503, json: () => ({ result: { suwalka_dealer: DEALER } }) });
+  assert.deepStrictEqual([r.userinfo, r.claims], [{}, {}]);
+  assert.ok(r.logged.some((l) => l.includes('resolver returned 503')), JSON.stringify(r.logged));
+});
+
+check('UAT: a fetch that throws sets nothing and logs the error', () => {
+  const r = runLive(() => { throw new Error('connection refused'); });
+  assert.deepStrictEqual([r.userinfo, r.claims], [{}, {}]);
+  assert.ok(r.logged.some((l) => l.includes('resolver call failed') && l.includes('connection refused')), JSON.stringify(r.logged));
+});
+
+check('UAT: a 200 without `result` sets nothing and logs it', () => {
+  const r = runLive({ status: 200, json: () => ({ error: false }) });
+  assert.deepStrictEqual([r.userinfo, r.claims], [{}, {}]);
+  assert.ok(r.logged.some((l) => l.includes('without a result field')), JSON.stringify(r.logged));
+});
+
+check('UAT: "already exists" is quiet (metadata wins); any other setClaim failure is logged', () => {
+  const quiet = runLive(ok({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: DEALER }), {
+    userinfoSet: () => { throw new Error('key already exists'); },
+  });
+  assert.ok(!quiet.logged.some((l) => l.includes('setClaim')), `expected no setClaim log; got ${JSON.stringify(quiet.logged)}`);
+  assertDealerWithAt(quiet.claims.suwalka_dealer, 'claims after userinfo refused');
+
+  const loud = runLive(ok({ suwalka_identity: { employeeId: 'e1' }, suwalka_dealer: DEALER }), {
+    claimsSet: () => { throw new Error('invalid claim value'); },
+  });
+  assert.ok(loud.logged.some((l) => l.includes('claims.setClaim(suwalka_dealer) failed') && l.includes('invalid claim value')),
+    JSON.stringify(loud.logged));
 });
 
 let failed = 0;
