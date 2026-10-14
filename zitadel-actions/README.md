@@ -1,7 +1,7 @@
 # Zitadel Complement Token Action — suwalka claims
 
 Mints `suwalka_admin` / `suwalka_caps` / `suwalka_identity` / `suwalka_outlet_set` /
-`suwalka_dept_set` custom claims into the token Zitadel issues, so they reach
+`suwalka_dept_set` / `suwalka_grant_caps` / `suwalka_levels` / `suwalka_dealer` custom claims into the token Zitadel issues, so they reach
 every backend service via APISIX's `X-Userinfo` header. Without this Action,
 `req.user.caps` (and `.adminGrants`, `.employeeId`, etc.) is always empty for
 every user, and any endpoint gated by `resolveModuleScopeFilter` (e.g.
@@ -14,6 +14,22 @@ Actions live in Zitadel's own database, configured through its Console UI (or
 Management API, which this workspace has no credentials for). This directory
 exists purely so the Action source is version-controlled and reviewable; you
 must paste it into the Console by hand.
+
+### `suwalka_dealer` (dealership slice 2, 2026-10-14)
+
+An OBJECT `{ v, pack, fn, m, x }` from org-hr's by-sub resolver, or `null` when the
+person's job title has no access pack. The Action sends it only when it is an object,
+as received plus one key, `at` — the mint time in integer epoch seconds. Absent means
+**no dealership access** (there is no "pre-claim, allow" state).
+
+`at` exists because `X-Userinfo` is the userinfo response, which has no `iat`;
+`@suwalka/common` refuses a dealer claim whose `at` (else `iat`) is over 1 h old. Userinfo
+is built per call, so `at` is fresh on each call — it dates the org-hr read behind it.
+Both `complementTokenClaims.js` (dev) and `uat/setIdentityClaimsLive.js` (UAT) carry the line.
+
+**Apply only after the org-hr build that returns `suwalka_dealer` from by-sub is deployed
+to that environment (slice 2 Q1); before that the line is inert.** Until it is applied,
+a dealership service with `DEALER_ACCESS_SOURCE=claim` gives nobody dealer access.
 
 ## Steps (Zitadel Console)
 
@@ -28,13 +44,37 @@ must paste it into the Console by hand.
    (requires `KUBECONFIG=H:\Personal\SFG\k8s-1-35-5-do-1-sgp1-1781614721042-kubeconfig.yaml`).
    **Do not commit that real value into this file or anywhere in git** — it's a
    shared secret with `suwalka-auth`.
-3. Set the **Timeout** to something comfortable (the endpoint is a single
-   in-cluster DB read; 5s is generous).
+3. Set the **Timeout** to `10s` and **Allowed To Fail** to on — the same values
+   `deploy-complement-token-action.sh` sets (`'timeout': '10s'`, `'allowedToFail': True`),
+   so a slow or failing org-hr never blocks a login.
 4. **Actions → Flows → Complement Token flow → "Pre Userinfo creation"
    trigger → add the Action you just created.**
 5. Save. No redeploy needed — it takes effect on the next token issuance
    (next login; existing access tokens are unaffected until they're refreshed
    or a new login happens).
+
+## Steps (Management API script, dev)
+
+`deploy-complement-token-action.sh` does steps 2–4 through the Management API
+(run `--dry-run` first). What to expect from it:
+
+- **Every request is checked.** A non-2xx, a curl/network error, or a response it
+  cannot read stops the run with exit **1** and prints the response body. A 403 on
+  the opening precheck exits **2** and nothing is changed.
+- **The trigger list is merged, never replaced.** It reads the Pre Userinfo creation
+  trigger first and prints `BEFORE: id(name) …`, writes existing ∪ this Action, then
+  re-reads and prints `AFTER : …`. If the trigger cannot be read with certainty it
+  stops *before* writing; if the re-read is missing any Action that was there before
+  (for example `complementTokenClaims`, which carries the `roles` claim) it exits 1
+  and names the missing id — re-attach it by hand at once.
+- The trigger id is taken from the live flow. Set `TRIGGER_ID` only if the trigger
+  has no Actions yet.
+- A run that stops after `update`/`create` but before `attach` has changed the Action
+  only; the trigger is untouched.
+- "Stored" is printed only after the re-read check passes — and is still not proof the
+  claims arrive; do the check below.
+
+Offline test (fake kubectl/curl, contacts nothing): `bash tests/zitadel-deploy-script.test.sh`.
 
 ## Verifying it worked
 

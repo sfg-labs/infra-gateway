@@ -2,7 +2,7 @@
  * Zitadel Action — Complement Token flow, "Pre Userinfo creation" trigger.
  *
  * Mints suwalka_admin / suwalka_caps / suwalka_identity / suwalka_outlet_set /
- * suwalka_dept_set / suwalka_grant_caps / suwalka_levels custom claims into the
+ * suwalka_dept_set / suwalka_grant_caps / suwalka_levels / suwalka_dealer custom claims into the
  * userinfo response (which APISIX's
  * openid-connect plugin forwards to every backend service as the base64 JSON
  * X-Userinfo header, decoded by @suwalka/common's readUser()).
@@ -81,7 +81,12 @@ function complementTokenClaims(ctx, api) {
   }
 
   var result = body && body.result;
-  if (!result) return;
+  if (!result) {
+    // A 200 with no `result` is a resolver contract break, not "no grants" —
+    // say so, or it reads exactly like a user who holds nothing.
+    logger.log('suwalka claim resolver 200 without a result field; no claims set; sub=' + sub);
+    return;
+  }
 
   // ── WRITE TO BOTH SURFACES. THIS IS THE WHOLE FIX. ──────────────────────
   //
@@ -106,9 +111,27 @@ function complementTokenClaims(ctx, api) {
   // Each call is wrapped separately: on a trigger where one surface is not
   // available, Zitadel throws, and a single try around both would silently
   // drop the surface that WAS available.
+  //
+  // Two failures are EXPECTED and stay quiet, so the log is not noise on every
+  // login: a surface this trigger does not offer (checked up front rather than
+  // provoked as a TypeError), and "already exists" — a key an earlier Action set
+  // from metadata, which wins; the UAT Action filters the same string. Any
+  // other throw is a REJECTED value and is logged, or it would vanish.
+  function setOn(where, surface, key, value) {
+    // Only a MISSING surface is skipped. A present one is always called, so a
+    // setClaim the runtime does not expose as a plain function throws and is
+    // logged below rather than silently skipping every claim.
+    if (!surface) return;
+    try {
+      surface.setClaim(key, value);
+    } catch (e) {
+      if (String(e).indexOf('already exists') < 0) logger.log(where + '.setClaim(' + key + ') failed', e);
+    }
+  }
+  var v1 = (api && api.v1) || {};
   function setBoth(key, value) {
-    try { api.v1.userinfo.setClaim(key, value); } catch (e) { /* surface absent on this trigger */ }
-    try { api.v1.claims.setClaim(key, value); } catch (e) { /* surface absent on this trigger */ }
+    setOn('userinfo', v1.userinfo, key, value);
+    setOn('claims', v1.claims, key, value);
   }
 
   if (result.suwalka_admin && result.suwalka_admin.length) {
@@ -150,5 +173,28 @@ function complementTokenClaims(ctx, api) {
   // undeployed Action indistinguishable from a caller who holds no levels.
   if (Array.isArray(result.suwalka_levels)) {
     setBoth('suwalka_levels', result.suwalka_levels);
+  }
+
+  // suwalka_dealer — the dealership access claim (slice 2, 2026-10-14).
+  //
+  // An OBJECT { v, pack, fn, m, x }, or null when the job title has no access
+  // pack. Unlike suwalka_grant_caps there is NO third state: absent means "no
+  // dealership access" to every consumer (@suwalka/common readDealerAccess
+  // returns null), so null is simply not sent. Pass the object through
+  // as received — consumers validate it; the Action must not reshape it —
+  // with ONE addition: `at`, the mint time in integer epoch seconds.
+  //
+  // Why `at`: @suwalka/common refuses a dealer claim older than 1 h (claim
+  // staleness, lost-phone window). It cannot use the token's `iat`, because
+  // X-Userinfo is the USERINFO response (see above), which carries no `iat`.
+  // Userinfo is built per call, so `at` is fresh on each userinfo call — that
+  // is fine: it then dates the claim from the org-hr read made in that call.
+  if (result.suwalka_dealer && typeof result.suwalka_dealer === 'object' && !Array.isArray(result.suwalka_dealer)) {
+    var dealer = {};
+    for (var k in result.suwalka_dealer) {
+      if (Object.prototype.hasOwnProperty.call(result.suwalka_dealer, k)) dealer[k] = result.suwalka_dealer[k];
+    }
+    dealer.at = Math.floor(Date.now() / 1000);
+    setBoth('suwalka_dealer', dealer);
   }
 }

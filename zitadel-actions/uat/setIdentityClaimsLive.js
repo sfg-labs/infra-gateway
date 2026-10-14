@@ -3,7 +3,7 @@
  * org "Suwalka UAT"). Live since 2026-09-19 ~09:50Z, Action id 391438409203188823.
  *
  * Resolves suwalka_identity / suwalka_admin / suwalka_caps / suwalka_outlet_set /
- * suwalka_dept_set / suwalka_grant_caps from UAT org-hr on every token, by sub.
+ * suwalka_dept_set / suwalka_grant_caps / suwalka_dealer from UAT org-hr on every token, by sub.
  *
  * Why it exists: the two Actions copied onto the UAT instance at cut-over
  * (complementTokenClaims, setIdentityClaimsUat) only copy claims out of the user's
@@ -80,4 +80,15 @@ function setIdentityClaimsLive(ctx, api) {
   if (Array.isArray(result.suwalka_outlet_set) && result.suwalka_outlet_set.length) setBoth('suwalka_outlet_set', result.suwalka_outlet_set);
   if (Array.isArray(result.suwalka_dept_set) && result.suwalka_dept_set.length) setBoth('suwalka_dept_set', result.suwalka_dept_set);
   if (result.suwalka_grant_caps && typeof result.suwalka_grant_caps === 'object') setBoth('suwalka_grant_caps', result.suwalka_grant_caps);
+  // suwalka_dealer (dealership slice 2): an object or nothing — absent means no dealership access.
+  // Passed as received plus `at` (mint time, integer epoch seconds): userinfo has no `iat`,
+  // and @suwalka/common refuses a dealer claim older than 1 h by this stamp.
+  if (result.suwalka_dealer && typeof result.suwalka_dealer === 'object' && !Array.isArray(result.suwalka_dealer)) {
+    var dealer = {};
+    for (var k in result.suwalka_dealer) {
+      if (Object.prototype.hasOwnProperty.call(result.suwalka_dealer, k)) dealer[k] = result.suwalka_dealer[k];
+    }
+    dealer.at = Math.floor(Date.now() / 1000);
+    setBoth('suwalka_dealer', dealer);
+  }
 }
