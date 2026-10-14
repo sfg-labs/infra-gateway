@@ -389,11 +389,14 @@ fi
 }
 
 echo "trigger $TRIGGER_ID BEFORE: $BEFORE_HUMAN"
-echo "trigger $TRIGGER_ID WRITING: $IDS"
-
-zcall attach -X POST "$ISSUER/management/v1/flows/2/trigger/$TRIGGER_ID" \
-  -H 'Content-Type: application/json' \
-  -d "{\"actionIds\":$IDS}"
+if [ "$IDS" = "$BEFORE_IDS" ]; then
+  echo "trigger $TRIGGER_ID unchanged; skipping attach"
+else
+  echo "trigger $TRIGGER_ID WRITING: $IDS"
+  zcall attach -X POST "$ISSUER/management/v1/flows/2/trigger/$TRIGGER_ID" \
+    -H 'Content-Type: application/json' \
+    -d "{\"actionIds\":$IDS}"
+fi
 
 zcall flow-after "$ISSUER/management/v1/flows/2"
 FLOW_AFTER=$(flow_trigger "$ZTMP/flow-after.json") || exit 1

@@ -2,11 +2,11 @@
 #
 # NEW object: it replaces nothing. Apply by hand on Cantech with `kubectl create -f`
 # (never `apply`), after checking the object does not exist and the Service does:
-#   kubectl -n sfg-pos-app get apisixroute suwalka-dealership   # expect NotFound
-#   kubectl -n sfg-pos-app get svc suwalka-dealership          # expect port 3010
+#   kubectl -n suwalka-dealership-dev get apisixroute suwalka-dealership   # expect NotFound
+#   kubectl -n suwalka-dealership-dev get svc suwalka-dealership          # expect port 3010
 # Gateway cd.yaml targets the retired DOKS cluster and has not run since 2026-07-09.
 #
-# Namespace follows the live Cantech layout (sfg-pos-app); the ApisixRoute must sit in the
+# The dedicated DEV namespace isolates deployment credentials; the ApisixRoute must sit in the
 # same namespace as the suwalka-dealership Service (no serviceNamespace support).
 # CORS, openid-connect, request-id, limit-req and response-rewrite mirror
 # routes/suwalka-org-hr-payroll.yaml as deployed; see the CORS note there before tightening anything.
@@ -14,7 +14,7 @@ apiVersion: apisix.apache.org/v2
 kind: ApisixRoute
 metadata:
   name: suwalka-dealership
-  namespace: sfg-pos-app
+  namespace: suwalka-dealership-dev
   labels:
     sfg-project: suwalka
     sfg-auth: jwt
