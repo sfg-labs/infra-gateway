@@ -143,34 +143,30 @@ spec:
         # preflight OPTIONS the backend itself doesn't handle (tsoa only
         # generates the POST route) — answer it at the gateway instead.
         # ------------------------------------------------------------------
-        # CORS HERE REFLECTS DEPLOYED REALITY — DO NOT "FIX" IT IN PASSING.
+        # CORS ORIGIN LIST (infra-gateway #32). This rule used to carry
+        # `allow_origins: '**'` with `allow_credential: true`, which echoed
+        # ANY website's origin back with credentials allowed (proven from
+        # outside on 2026-10-11). It is now the explicit first-party list:
+        # the dev admin web, its planned suwalka.faithandgamble.in host, and
+        # the two local dev servers (next dev :3000, expo web :8081).
         #
-        # `allow_origins: '**'` together with `allow_credential: true` is the
-        # classic unsafe CORS combination and will look like a bug. It is
-        # recorded here because it is what is actually running on the cluster
-        # (verified against the live ApisixRoute, 2026-07-20).
+        # Only `allow_origins` changed. Methods, headers and
+        # `allow_credential` are as they were, so `GET /auth/docs` (served by
+        # this same rule) is untouched.
         #
-        # An earlier revision of this file carried stricter values (an explicit
-        # origin list, `allow_credential: false`, `allow_methods: POST,OPTIONS`).
-        # Those were NEVER applied: they reached this file without being
-        # reviewed as a security change, and applying them would also have
-        # broken `GET /auth/docs`, which is served by this same rule but is not
-        # in a POST,OPTIONS method list. The file has been reconciled DOWN to
-        # the live values so that a CD run is a no-op rather than an unreviewed
-        # security + availability change applied by a deploy script.
-        #
-        # Tightening this is a deliberate follow-up with its own testing, not a
-        # drive-by edit. Before narrowing `allow_origins`, the origin list must
-        # be verified against every real caller (admin-web prod and dev, local
-        # dev hosts, mobile/webview clients, anything else that presents an
-        # Origin header) — an origin missing from that list fails preflight
-        # silently, with no ACAO header and a client-side block that is not
-        # visible in gateway logs.
+        # The same list is on every browser-facing rule in this file,
+        # routes/suwalka-org-hr-payroll.yaml and routes/suwalka-notification.yaml
+        # — change them together. UAT has its own list in the *-uat.yaml files;
+        # never mix the two. A caller that sends no Origin header (the mobile
+        # app, curl, service-to-service) is not affected by this list at all.
+        # A web origin missing from it fails silently in the browser (no ACAO
+        # header, nothing in gateway logs), so add a new web host here BEFORE
+        # pointing it at this API.
         # ------------------------------------------------------------------
         - name: cors
           enable: true
           config:
-            allow_origins: "**"
+            allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
             allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
             allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
             allow_credential: true
@@ -266,7 +262,7 @@ spec:
         - name: cors
           enable: true
           config:
-            allow_origins: "**"
+            allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
             allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
             allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
             allow_credential: true
@@ -364,7 +360,7 @@ spec:
         - name: cors
           enable: true
           config:
-            allow_origins: "**"
+            allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
             allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
             allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
             allow_credential: true
@@ -484,7 +480,7 @@ spec:
         - name: cors
           enable: true
           config:
-            allow_origins: "**"
+            allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
             allow_methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
             allow_headers: "Authorization,Content-Type,Accept,Idempotency-Key,X-Request-Id,X-Gate-Token,X-Tenant-Id,X-Branch-Id,X-Org-Id"
             allow_credential: true

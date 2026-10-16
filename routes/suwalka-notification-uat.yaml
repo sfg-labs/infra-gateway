@@ -103,7 +103,7 @@ spec:
     - name: cors
       enable: true
       config:
-        allow_origins: "**"
+        allow_origins: "http://localhost:3000,http://localhost:8081,https://suwalka-uat.faithandgamble.in,https://app.suwalkamotors.co.in"
         allow_methods: "GET,POST,OPTIONS"
         allow_headers: "Authorization,Content-Type,Accept,X-Request-Id"
         allow_credential: true

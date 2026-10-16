@@ -94,6 +94,42 @@ spec:
         rejected_code: 429
         key_type: var
         key: remote_addr
+
+  # Zitadel's /debug/* (metrics, healthz, ready) — answered 404 here, never proxied
+  # (infra-gateway #32). The zitadel-auth /* catch-all above used to hand these to the
+  # internet: GET /debug/metrics returned the full Prometheus dump (proven from outside,
+  # 2026-10-11). Nothing first-party reaches them through the gateway — the kubelet
+  # probes in helm/zitadel/values.yaml hit the pod on :8080 directly, and login, OIDC
+  # discovery, the console and the login UI live under other paths.
+  # Higher priority so this wins over the /* catch-all. APISIX matches on the
+  # normalised path, so //debug/metrics, /x/../debug/metrics and /%64ebug/metrics all
+  # land here too. The backend is listed only because a rule needs one; uri-blocker
+  # answers before any upstream is contacted.
+  # The UAT instance host has the same rule in routes/zitadel-uat-instance.yaml.
+  - name: zitadel-debug-blocked
+    priority: 10
+    match:
+      hosts:
+      - sfg-labs.faithandgamble.in
+      paths:
+      - /debug
+      - /debug/*
+    backends:
+    - serviceName: sfg-zitadel
+      servicePort: 8080
+      weight: 100
+    plugins:
+    - name: uri-blocker
+      enable: true
+      config:
+        block_rules:
+        - "^/debug"
+        rejected_code: 404
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
 ---
 # --- sfg-apps backends (NMA / Baithak / CMS) ---
 apiVersion: apisix.apache.org/v2

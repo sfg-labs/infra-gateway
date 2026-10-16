@@ -1,0 +1,61 @@
+# Plain HTTP -> HTTPS for the dev hosts (infra-gateway #32).
+#
+# Before this rule, http://api.faithandgamble.in, http://suwalka-dev.faithandgamble.in
+# and http://sfg-labs.faithandgamble.in were answered 200 over plain HTTP (proven from
+# outside, 2026-10-11): a token or password sent to an http:// URL crossed the internet
+# in the clear. This rule answers every plain-HTTP request on those three hosts with a
+# 301 to the same URL on https://.
+#
+# WHY A GLOBAL RULE AND NOT A ROUTE. APISIX picks a route by the longest matching path
+# first and only then by priority, so a catch-all `/*` redirect route — whatever its
+# priority — loses to every route with a longer path (`/api/hr/*`, `/auth/login`, ...).
+# Tested on APISIX 3.17: such a route redirected http://api.../nope but still served
+# http://api.../api/hr/employees. A global rule runs before route matching, so it covers
+# every path, including ones added later.
+#
+# A global rule sees EVERY request on EVERY host of this gateway, UAT included. The
+# `_meta.filter` below is what narrows it, and all three conditions must hold:
+#   1. scheme == http          — only the plain-HTTP listener; HTTPS never matches, so
+#                                there is no redirect loop.
+#   2. host in (three dev hosts) — UAT and every other host are untouched; they are
+#                                deliberately not listed (dev and UAT stay in separate files).
+#   3. path is not /.well-known/acme-challenge/* — the certificates here are issued by
+#                                cert-manager's HTTP-01 solver through this same gateway
+#                                (k8s/cert-issuer.yaml) and Let's Encrypt fetches that path
+#                                over plain HTTP at every renewal. DO NOT remove this line.
+# If the filter were dropped or mistyped, the redirect would apply to HTTPS too and loop
+# on every host. After ANY edit to this file: check https:// on a dev host AND a UAT host
+# straight after applying, and `kubectl -n sfg-gateway delete apisixglobalrule
+# https-redirect-dev` if either is wrong (deleting it restores the old behaviour).
+#
+# WHY NOT `http_to_https: true`. On this gateway that option builds the Location from
+# APISIX's own TLS listen port (9443 — helm/apisix/values.yaml), i.e.
+# https://host:9443/..., which is closed from outside. It only works once
+# `plugin_attr.redirect.https_port: 443` is set, which needs a Helm upgrade of the
+# gateway. An explicit `uri` needs nothing.
+#
+# 301 for every method: a client that POSTs to http:// is re-sent as a GET by most
+# clients and fails — on purpose. Nothing first-party is configured with an http:// URL
+# (admin-web, the mobile app and every in-cluster setting use https:// or the in-cluster
+# Service name; checked 2026-10-11).
+#
+# NOT applied by helm/deploy.sh — apply by hand, like the other host-specific files in
+# this directory:  kubectl apply -f k8s/https-redirect-dev.yaml
+apiVersion: apisix.apache.org/v2
+kind: ApisixGlobalRule
+metadata:
+  name: https-redirect-dev
+  namespace: sfg-gateway
+spec:
+  ingressClassName: apisix
+  plugins:
+    - name: redirect
+      enable: true
+      config:
+        uri: "https://$host$request_uri"
+        ret_code: 301
+        _meta:
+          filter:
+            - ["scheme", "==", "http"]
+            - ["host", "in", ["api.faithandgamble.in", "suwalka-dev.faithandgamble.in", "sfg-labs.faithandgamble.in"]]
+            - ["uri", "!", "~~", "^/\\.well-known/acme-challenge/"]
