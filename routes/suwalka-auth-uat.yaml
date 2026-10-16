@@ -186,6 +186,8 @@ spec:
           - /auth/password/forgot/
           - /auth/password/reset
           - /auth/password/reset/
+          - /auth/password/verify-code
+          - /auth/password/verify-code/
         methods: [POST, OPTIONS]
       backends:
         - serviceName: suwalka-auth

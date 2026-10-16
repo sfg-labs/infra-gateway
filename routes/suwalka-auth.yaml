@@ -7,7 +7,7 @@
 # auth is reached at:
 #   PUBLIC (no token):  /auth/login | /auth/refresh | /auth/logout | /auth/docs
 #   PUBLIC (no token):  /auth/password/change   (own rule — tighter rate limit)
-#   PUBLIC (no token):  /auth/password/forgot | /auth/password/reset
+#   PUBLIC (no token):  /auth/password/forgot | /auth/password/verify-code | /auth/password/reset
 #                       (own rule — same tight limit as password/change)
 #   PROTECTED (JWT):    /auth/admin/*
 # (login/refresh/logout are POST; /auth/docs is the Swagger UI. /healthz stays
@@ -455,7 +455,8 @@ spec:
                 X-Gateway: sfg-labs
                 X-Project: suwalka
     # Self-service forgot password (suwalka-auth#36). POST /auth/password/forgot
-    # emails a reset code; POST /auth/password/reset sets a new password with
+    # emails a reset code; POST /auth/password/verify-code checks it on its own
+    # (two-screen flow, 2026-10-16); POST /auth/password/reset sets a new password with
     # it. Both are pre-auth (the employee cannot sign in), so this is the same
     # shape as the password-change rule above: its own rule, POST + OPTIONS,
     # both path spellings, the same CORS, and the same 5/10 limit.
@@ -475,6 +476,8 @@ spec:
           - /auth/password/forgot/
           - /auth/password/reset
           - /auth/password/reset/
+          - /auth/password/verify-code
+          - /auth/password/verify-code/
         methods: [POST, OPTIONS]
       backends:
         - serviceName: suwalka-auth
