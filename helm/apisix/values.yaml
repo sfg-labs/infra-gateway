@@ -12,7 +12,7 @@
 # accordingly (or move limit-req to a shared-store policy first). The full
 # reasoning, including why source-IP collapse makes these buckets shared, is in
 # the header comment of routes/suwalka-auth.yaml.
-replicaCount: 1   # single-node DOKS cluster — anti-affinity gives no HA on one node
+replicaCount: 2   # two copies so one node loss does not take down dev + UAT (5-node Cantech cluster)
 
 apisix:
   enabled: true

@@ -36,6 +36,14 @@ if [[ -z "${DRY_RUN}" ]]; then
     echo "         Set SUWALKA_AI_GATEWAY_SECRET before deploying." >&2
     exit 1
   fi
+  if [[ -z "${SUWALKA_AI_GATEWAY_SECRET_UAT:-}" ]]; then
+    echo "  ERROR: SUWALKA_AI_GATEWAY_SECRET_UAT is unset. Same failure mode as" >&2
+    echo "         SUWALKA_AI_GATEWAY_SECRET above, but for routes/suwalka-ai-services-uat.yaml —" >&2
+    echo "         deliberately a DISTINCT secret from prod's so UAT can never forge a" >&2
+    echo "         trusted X-Gateway-Secret against prod." >&2
+    echo "         Set SUWALKA_AI_GATEWAY_SECRET_UAT before deploying." >&2
+    exit 1
+  fi
   if [[ -z "${ZIMMA_GATEWAY_SECRET:-}" ]]; then
     echo "  ERROR: ZIMMA_GATEWAY_SECRET is unset. envsubst would emit a null" >&2
     echo "         X-Gateway-Secret value; kubectl apply exits 0 regardless, but the" >&2
@@ -118,7 +126,7 @@ helm repo add apisix  https://apache.github.io/apisix-helm-chart --force-update
 helm repo add zitadel https://charts.zitadel.com                 --force-update
 helm repo update
 
-echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs)"
+echo "===> [2/5] Ensuring namespaces (sfg-gateway, sfg-apps, sfg-labs, sfg-pos-app-uat)"
 if [[ -z "${DRY_RUN}" ]]; then
   kubectl apply -f k8s/namespaces.yaml
 else
@@ -198,18 +206,27 @@ fi
 
 echo "===> [5/5] Applying service routes"
 if [[ -z "${DRY_RUN}" ]]; then
-  # Two route files embed a deploy-time secret as an envsubst placeholder
+  # Route files embed a deploy-time secret as an envsubst placeholder
   # (X-Gateway-Secret injection, proving requests came from APISIX):
-  #   routes/suwalka-ai-services.yaml -> ${SUWALKA_AI_GATEWAY_SECRET}
-  #   routes/zimma-api.yaml           -> ${ZIMMA_GATEWAY_SECRET}
+  #   routes/suwalka-ai-services.yaml     -> ${SUWALKA_AI_GATEWAY_SECRET}
+  #   routes/suwalka-ai-services-uat.yaml -> ${SUWALKA_AI_GATEWAY_SECRET_UAT}  (distinct from prod's)
+  #   routes/zimma-api.yaml               -> ${ZIMMA_GATEWAY_SECRET}
   # Substitute ONLY the file's own var so proxy-rewrite regex refs like $1
   # survive; every other route applies verbatim. A bare `kubectl apply` of
-  # either file would ship the literal placeholder and 401 every affected
-  # call. Both vars are hard-fail-checked up front, before step 1 — see the
-  # guard at the top of this script (N3, PR #33 round-2 review) for why it
-  # was moved there instead of living here.
+  # any of these would ship the literal placeholder and 401 every affected
+  # call. All three vars are hard-fail-checked up front, before step 1 — see
+  # the guard at the top of this script (N3, PR #33 round-2 review) for why
+  # it was moved there instead of living here.
+  #
+  # NOTE the case order below: the UAT pattern must be matched BEFORE the
+  # plain suwalka-ai-services.yaml pattern, since bash `case` uses first
+  # match — *suwalka-ai-services.yaml would otherwise also match the UAT
+  # filename (which ends in the same suffix) and substitute the wrong var.
   for route in routes/*.yaml; do
     case "${route}" in
+      *suwalka-ai-services-uat.yaml)
+        envsubst '${SUWALKA_AI_GATEWAY_SECRET_UAT}' < "${route}" | kubectl apply -f -
+        ;;
       *suwalka-ai-services.yaml)
         envsubst '${SUWALKA_AI_GATEWAY_SECRET}' < "${route}" | kubectl apply -f -
         ;;
@@ -222,10 +239,14 @@ if [[ -z "${DRY_RUN}" ]]; then
     esac
   done
   kubectl -n "${NAMESPACE}" get apisixroutes
+  kubectl -n sfg-pos-app-uat get apisixroutes
 else
   echo "    [dry-run] would apply the following route files (envsubst substitution noted where used):"
   for route in routes/*.yaml; do
     case "${route}" in
+      *suwalka-ai-services-uat.yaml)
+        echo "      [dry-run] would run: envsubst '\${SUWALKA_AI_GATEWAY_SECRET_UAT}' < ${route} | kubectl apply -f -"
+        ;;
       *suwalka-ai-services.yaml)
         echo "      [dry-run] would run: envsubst '\${SUWALKA_AI_GATEWAY_SECRET}' < ${route} | kubectl apply -f -"
         ;;

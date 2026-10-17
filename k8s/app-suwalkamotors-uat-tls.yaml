@@ -1,0 +1,41 @@
+# TLS for app.suwalkamotors.co.in — the public address of the UAT admin web
+# (routes/admin-web-uat.yaml; suwalka-uat.faithandgamble.in stays as an alias with
+# its own cert, which this file does not touch).
+#
+# 1. cert-manager Certificate → Let's Encrypt cert in Secret `app-suwalkamotors-tls`,
+#    via the letsencrypt-prod ClusterIssuer (HTTP-01 through APISIX, k8s/cert-issuer.yaml).
+# 2. ApisixTls → APISIX serves it for SNI app.suwalkamotors.co.in on :443.
+#
+# Same pattern as suwalka-uat.faithandgamble.in (routes/admin-web-uat.yaml) and
+# web.suwalkamotors.co.in (namespace suwalka-website).
+#
+# HTTP-01 only succeeds once the DNS A record app.suwalkamotors.co.in → 202.66.173.20
+# (the gateway) answers from the authoritative nameservers. Apply this file AFTER
+# DNS is live, wait for `kubectl -n sfg-pos-app-uat get certificate
+# app-suwalkamotors-tls` to show READY=True, and only then apply the route.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: app-suwalkamotors-tls
+  namespace: sfg-pos-app-uat
+spec:
+  secretName: app-suwalkamotors-tls
+  dnsNames:
+    - app.suwalkamotors.co.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: app-suwalkamotors
+  namespace: sfg-pos-app-uat
+spec:
+  ingressClassName: apisix
+  hosts:
+    - app.suwalkamotors.co.in
+  secret:
+    name: app-suwalkamotors-tls
+    namespace: sfg-pos-app-uat

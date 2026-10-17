@@ -1,0 +1,35 @@
+# TLS for UAT's own Zitadel virtual instance (sfg-labs-uat.faithandgamble.in),
+# created 2026-09-19 on the shared sfg-zitadel deployment. See
+# docs/zitadel-uat-instance.md.
+#
+# 1. cert-manager Certificate → Let's Encrypt cert in Secret `sfg-labs-uat-tls`.
+# 2. ApisixTls → APISIX serves it for SNI sfg-labs-uat.faithandgamble.in on :443.
+#
+# The host must match the UAT instance's custom domain and the
+# zitadel-uat-instance route (routes/zitadel-uat-instance.yaml).
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sfg-labs-uat-tls
+  namespace: sfg-gateway
+spec:
+  secretName: sfg-labs-uat-tls
+  dnsNames:
+    - sfg-labs-uat.faithandgamble.in
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+---
+apiVersion: apisix.apache.org/v2
+kind: ApisixTls
+metadata:
+  name: sfg-labs-uat-tls
+  namespace: sfg-gateway
+spec:
+  ingressClassName: apisix
+  hosts:
+    - sfg-labs-uat.faithandgamble.in
+  secret:
+    name: sfg-labs-uat-tls
+    namespace: sfg-gateway

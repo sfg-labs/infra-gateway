@@ -32,7 +32,23 @@ jobs:
           shellcheck k3s/*.sh helm/deploy.sh \
             docker/apisix/setup-routes.sh \
             tests/lint.sh tests/helm-template.sh tests/validate-routes.sh \
-            tests/smoke/smoke-test.sh tests/smoke/smoke-test-local.sh
+            tests/smoke/smoke-test.sh tests/smoke/smoke-test-local.sh \
+            zitadel-actions/deploy-complement-token-action.sh tests/zitadel-deploy-script.test.sh
+
+      # The Zitadel Action is JavaScript that runs inside the IdP, so nothing
+      # else in this pipeline executes it: yamllint and shellcheck skip .js, and
+      # the integration job exercises APISIX rather than Zitadel. Without this
+      # step an inverted claim guard ships green and shows up only as a claim
+      # silently missing from every token — which is how suwalka_grant_caps went
+      # unminted from 2026-08-03 to 2026-08-24.
+      - name: Zitadel Action unit tests
+        run: node tests/zitadel-action-claims.test.js
+
+      # The deploy script talks to Zitadel's Management API; this runs it with
+      # fake kubectl/curl (no cluster, no IdP) and proves a failed read of the
+      # trigger list stops the run BEFORE the trigger POST that would replace it.
+      - name: Zitadel deploy script offline test
+        run: bash tests/zitadel-deploy-script.test.sh
 
   validate-routes:
     name: Validate ApisixRoute YAMLs
