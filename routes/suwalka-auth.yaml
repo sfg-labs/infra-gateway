@@ -456,17 +456,19 @@ spec:
                 X-Project: suwalka
     # Self-service forgot password (suwalka-auth#36). POST /auth/password/forgot
     # emails a reset code; POST /auth/password/verify-code checks it on its own
-    # (two-screen flow, 2026-10-16); POST /auth/password/reset sets a new password with
-    # it. Both are pre-auth (the employee cannot sign in), so this is the same
-    # shape as the password-change rule above: its own rule, POST + OPTIONS,
-    # both path spellings, the same CORS, and the same 5/10 limit.
+    # and returns a reset pass (two-screen flow, 2026-10-16); POST
+    # /auth/password/reset sets the new password with that pass. All three are
+    # pre-auth (the employee cannot sign in), so this is the same shape as the
+    # password-change rule above: its own rule, POST + OPTIONS, both path
+    # spellings, the same CORS, and the same 5/10 limit.
     #
     # Everything said about that limit applies here too: keyed on remote_addr
     # it is a volumetric backstop, not a per-client control. The real controls
     # live in suwalka-auth — 3 codes per login name per hour, 5 wrong codes per
     # 15 minutes, a ~2s constant floor on /forgot, and the change-password floor
-    # plus the shared credential gate on /reset. Legitimate demand is a few
-    # requests per employee per forgotten password, far under 5 req/s.
+    # plus the shared credential gate on /verify-code and /reset. Legitimate
+    # demand is a few requests per employee per forgotten password, far under
+    # 5 req/s.
     - name: suwalka-auth-password-reset
       match:
         hosts:
