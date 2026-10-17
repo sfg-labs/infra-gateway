@@ -1,6 +1,6 @@
 # UAT mirror of routes/suwalka-auth.yaml — same four rules (public login/refresh/
 # logout/docs, JWT-protected /auth/admin/*, the tightly-rate-limited
-# /auth/password/change, and /auth/password/forgot + /reset under the same limit),
+# /auth/password/change, and /auth/password/forgot + /verify-code + /reset under the same limit),
 # same CORS/rate-limit posture, UAT host + namespace.
 #
 # See routes/suwalka-auth.yaml for the full rationale behind every rate-limit and
@@ -186,6 +186,8 @@ spec:
           - /auth/password/forgot/
           - /auth/password/reset
           - /auth/password/reset/
+          - /auth/password/verify-code
+          - /auth/password/verify-code/
         methods: [POST, OPTIONS]
       backends:
         - serviceName: suwalka-auth
