@@ -443,6 +443,75 @@ spec:
         header_name: X-Request-Id
         include_in_response: true
 
+  # Suwalka training certificate verification — PUBLIC BY DESIGN, GET-ONLY (2026-10-16).
+  #
+  # Every issued training certificate carries a QR that opens admin-web's public page
+  # /verify/certificate/<code>, which calls GET /api/training/certificates/verify/<code>
+  # cross-origin. Whoever scans it (an employer, the employee) has no Zitadel session,
+  # so `openid-connect` is deliberately omitted. org-hr serves the path from
+  # routes/trainingCertificateVerifyPublic.route.ts, mounted BEFORE readUser; the
+  # response carries only holder name, program, organisation, dates and status — no
+  # employee code, ids, revoke reason or outlet (training v2 slice 6, rule 14).
+  #
+  # The code is the only credential: 12 Crockford base32 characters for v2 certificates,
+  # 14-character base64url for old training_certifications rows. Hence `_` and `-` are in
+  # the character class below, capped at 40 (org-hr rejects anything longer).
+  #
+  # ⚠️ WITHOUT THIS BLOCK THE QR DOES NOT WORK, AND NOTHING IN org-hr CAN TELL: the path
+  # sits under the `bearer_only: true` /api/training/* rule in
+  # routes/suwalka-org-hr-payroll.yaml, so every scan would 401 here.
+  #
+  # NESTED inside that protected prefix, so it follows `suwalka-gatepass-public`: an
+  # anchored `match.exprs` Path pin owns exactly one segment after /verify/ and nothing
+  # deeper, the method list is GET/OPTIONS only, and priority is pinned. No other
+  # /api/training/* path or verb is opened, and the preflight for authenticated training
+  # endpoints still falls through to the protected rule's own CORS.
+  #
+  # Rate limit: the file's standard 20/10 public default (same as the careers rule on
+  # UAT). The code's entropy is the real defence against guessing, not this.
+  - name: suwalka-training-certificate-verify-public
+    priority: 10
+    match:
+      hosts:
+      - api.suwalka-pos.sfg-labs.in
+      - api.faithandgamble.in
+      paths:
+      - /api/training/certificates/verify/*
+      methods:
+      - GET
+      - OPTIONS
+      exprs:
+      - subject:
+          scope: Path
+        op: RegexMatch
+        value: "^/api/training/certificates/verify/[A-Za-z0-9_-]{1,40}/?$"
+    backends:
+    - serviceName: suwalka-org-hr-payroll
+      servicePort: 3001
+      weight: 100
+    plugins:
+    - name: cors
+      enable: true
+      config:
+        allow_origins: "http://localhost:3000,https://suwalka.faithandgamble.in,https://suwalka-dev.faithandgamble.in"
+        allow_methods: "GET,OPTIONS"
+        allow_headers: "*"
+        allow_credential: false
+        max_age: 3600
+    - name: limit-req
+      enable: true
+      config:
+        rate: 20
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+    - name: request-id
+      enable: true
+      config:
+        header_name: X-Request-Id
+        include_in_response: true
+
   # Suwalka interview resume link — PUBLIC BY DESIGN, and GET-ONLY.
   #
   # An interviewer is emailed a panel invite carrying a `Resume:` link to the
